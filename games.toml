@@ -1,0 +1,250 @@
+# Per-game table for the Edge of Reality N64 ports of Neversoft's THPS games.
+#
+# Every number here is a *fact about the ROM* (offsets, addresses, sizes, names),
+# not ROM content. Tools in decomp/common/ read this through thpsgame.py.
+# To add a game, see decomp/common/README.md ("Adding a game").
+#
+# Terms:
+#   boot segment   plaintext code at ROM [boot_rom, root_ptr) -> RDRAM boot_vram
+#                  (IDO libultra + EoR's loader). IPL3 copies it.
+#   boot BSS       [boot_end, main_vram): cleared by the entry stub.
+#   root_ptr       ROM offset of the u32 "asset root" word (0xB0000000|rom offset);
+#                  it is the first word after the boot segment. The chunk table
+#                  follows at root_ptr+4.
+#   main image     the ERZ-inflated game code, loaded at main_vram, one chunk
+#                  per `stride` bytes.
+#   *_text         executable ranges (vram), with RSP microcode carved out.
+#   ucode          RSP microcode linked inside the CPU .text: skipped by
+#                  disassembly/recomp, split out by splat as `textbin`.
+#   [[game.sig_unit]] etc. are optional hints used by sigmatch.
+#
+# Versions. A row may say `inherits = "<row>"` and list only what differs (thpsgame.py
+# merges the chain). Rows of one family are ROM versions of one game (thps1, thps1_eu,
+# thps1_us10...). Fields the THPS1 host reads (docs/internals/versions.md):
+#   game_id, display_name   the host's GameEntry identity (header_name is the ROM header's internal name)
+#   rom_md5, rom_xxh3       other hashes of the big-endian ROM (xxh3 = what librecomp's select_rom checks)
+#   code_class              which recompiled payload runs this ROM; versions with identical code share one
+#                           (decomp/thps<N>/recomp-host/versions/classes.toml)
+#   tv_default              osTvType the host sets: "ntsc" | "pal" | "mpal" (a --tv flag overrides it)
+#   status                  "supported" (host registers it) | "recognised" (identified by name, not run yet)
+#   refs_from               test references fall through to this row's (tests/run.py --version)
+#   rom_names               the dump's usual file names (tests find a ROM in roms/ by them)
+
+[thps1]
+title        = "Tony Hawk's Pro Skater (U) v1.1"
+rom_sha1     = "4900b6c92fb8df1765e91e891dccc525bb102fe1"
+rom_md5      = "aff424a1883dc7bb92c7b2ebe9342f85"
+rom_xxh3     = "B7B085A35E270C23"
+game_id      = "thps1.n64.us.1.1"
+display_name = "Tony Hawk's Pro Skater (USA, v1.1)"
+code_class   = "us11"
+tv_default   = "ntsc"
+status       = "supported"
+rom_names    = ["Tony Hawk's Pro Skater (U) (v1.1).n64", "Tony Hawk's Pro Skater (USA) (Rev 1).z64"]
+rom_size     = 0xC00000
+header_name  = "TONY HAWK PRO SKATER"
+game_code    = "NTFE"
+revision     = 1
+boot_rom     = 0x1000
+boot_vram    = 0x80000400
+boot_end     = 0x80012F10      # boot segment end == boot BSS start
+main_vram    = 0x80016AC0      # boot BSS end == main image load address
+root_ptr     = 0x13B10         # ROM offset of the asset-root word == boot segment end
+stride       = 0x10000
+code_method  = 1
+n_chunks     = 14
+main_size    = 0xDF9A0
+main_sha1    = "7725fd5d2420769446ef81e207fddd398948781f"
+game_bss_end = 0x800FC8D0      # boot main clears up to 0x800FC8C5; splat bss_size rounds up
+entry        = 0x800C0480      # GameEntry
+asset_root   = 0x61E26
+n_packs      = 7
+boot_text    = [[0x80000400, 0x80000468], [0x80000870, 0x80011C10]]
+main_text    = [[0x800223C0, 0x80097C40], [0x8009B0A0, 0x800C0E20]]
+boot_data_vram = 0x80011C10    # boot .data start (after the last jr ra + padding to 16)
+main_data_vram = 0x800C0E20    # main .data start (same rule)
+ucode        = [
+  { name = "n_aspMain",   vram = 0x80097C40, size = 0xC60 },
+  { name = "rspboot",     vram = 0x800988A0, size = 0xD0 },
+  { name = "f3dex_fifo",  vram = 0x80098970, size = 0x1390 },
+  { name = "f3dex_xbus",  vram = 0x80099D00, size = 0x13A0 },
+]
+cop2_note    = "3x mfc2 in func_8005D0B0 (called) + 3x ctc2 in func_8006F574 (uncalled)"
+# ERZ recompression: asset pieces that cannot be repacked (name = pack index -> reason)
+pack_quirks  = []
+
+# --- THPS1 ROM versions (probed 2026-10-11) ---
+
+[thps1_eu]
+# Europe: the same program as v1.1. Boot segment, main image and every address are identical; the
+# differences are padding words, one instruction (the TV-type accessor's return sense), 4 splash
+# images and header fields. It runs the v1.1 payload (code_class us11).
+inherits     = "thps1"
+title        = "Tony Hawk's Skateboarding (E)"
+rom_sha1     = "c321cd05eec58765467878ac8015784535280e3c"
+rom_md5      = "c9e9c4a18b1540c6b4111331d7c663b8"
+rom_xxh3     = "8EF5310EBEB00EA0"
+game_id      = "thps1.n64.eu.1.0"
+display_name = "Tony Hawk's Skateboarding (Europe)"
+header_name  = "TONY HAWK SKATEBOARD"
+game_code    = "NTFP"
+revision     = 0
+main_sha1    = "850fe4dbc7c524d379d29f960cc604ad5e0b6d03"
+asset_root   = 0x61688
+tv_default   = "ntsc"          # the runtime paces VIs at 60 Hz and the frame sizes are NTSC's; "pal" (--tv pal) is experimental
+status       = "supported"
+refs_from    = "thps1"
+rom_names    = ["Tony Hawk's Skateboarding (Europe).z64", "Tony Hawk's Skateboarding (E).z64"]
+
+[thps1_us10]
+# USA v1.0: a different link of the same sources (boot segment 0x130 shorter, main image 0x2B20
+# smaller, upper .text re-ordered). Its own payload (code_class us10).
+inherits     = "thps1"
+title        = "Tony Hawk's Pro Skater (U) v1.0"
+rom_sha1     = "fc1b4dec85e6874fa7321edc24f5a1e78600d9d0"
+rom_md5      = "5ed7e392198a5fa56ee37ea9e93a8d50"
+rom_xxh3     = "E771EA04C14F3429"
+game_id      = "thps1.n64.us.1.0"
+display_name = "Tony Hawk's Pro Skater (USA, v1.0)"
+revision     = 0
+boot_end     = 0x80012DE0
+main_vram    = 0x80016990
+root_ptr     = 0x139E0
+main_size    = 0xDCE80
+main_sha1    = "cc1574ad4ee55b9bf5c4f024676f17ee1c3bba5f"
+entry        = 0x800A2280
+asset_root   = 0x61378
+code_class   = "us10"
+status       = "supported"
+game_bss_end = 0x800F9C80      # boot main clears up to 0x800F9C75
+boot_text    = [[0x80000400, 0x80000468], [0x80000870, 0x80011AE0]]
+main_text    = [[0x800221C0, 0x80097410], [0x8009A870, 0x800C0220]]
+boot_data_vram = 0x80011AE0    # last jr ra 0x80011AD4 + delay slot, pad to 16
+main_data_vram = 0x800C0220    # last function func_800C0200 (0x1C bytes), pad to 16
+ucode        = [
+  { name = "n_aspMain",   vram = 0x80097410, size = 0xC60 },
+  { name = "rspboot",     vram = 0x80098070, size = 0xD0 },
+  { name = "f3dex_fifo",  vram = 0x80098140, size = 0x1390 },
+  { name = "f3dex_xbus",  vram = 0x800994D0, size = 0x13A0 },
+]
+cop2_note    = "the same 3x mfc2 / 3x ctc2 functions as v1.1 (found by sigmatch)"
+refs_from    = "thps1_eu"    # same logo art as Europe
+rom_names    = ["Tony Hawk's Pro Skater (USA).z64", "Tony Hawk's Pro Skater (U) (v1.0).n64"]
+
+[thps2]
+title        = "Tony Hawk's Pro Skater 2 (U)"
+rom_sha1     = "458ac754cd8e08c46f4c5c9204192ecde84a179d"
+rom_md5      = "29974692808c112b306fbd259273dc96"
+rom_xxh3     = "8E5ABB6C1CE403DB"
+game_id      = "thps2.n64.us"     # the stored ROM keeps its pre-multi-version name (thps2.n64.us.z64)
+display_name = "Tony Hawk's Pro Skater 2 (USA)"
+code_class   = "us"
+tv_default   = "ntsc"
+status       = "supported"
+rom_names    = ["Tony Hawk's Pro Skater 2 (U).n64", "Tony Hawk's Pro Skater 2 (USA).z64"]
+rom_size     = 0x1000000
+header_name  = "THPS2"
+game_code    = "NTQE"
+revision     = 0
+boot_rom     = 0x1000
+boot_vram    = 0x80000400
+boot_end     = 0x80012F70
+main_vram    = 0x80016B20
+root_ptr     = 0x13B70
+stride       = 0x10000
+code_method  = 2
+n_chunks     = 15
+main_size    = 0xE7E10
+main_sha1    = "d22dfb9ba81b8777a3294bf14d5538f01200ea97"
+game_bss_end = 0x80102260
+entry        = 0x800B6AF8
+asset_root   = 0x797C6
+n_packs      = 9
+boot_text    = [[0x80000400, 0x80000468], [0x80000870, 0x80011C50]]
+main_text    = [[0x80020F50, 0x800AB7A0], [0x800AE9F0, 0x800DABF0]]
+boot_data_vram = 0x80011C50
+main_data_vram = 0x800DABF0
+ucode        = [
+  { name = "n_aspMain",   vram = 0x800AB7A0, size = 0xC60 },
+  { name = "rspboot",     vram = 0x800AC400, size = 0xD0 },
+  { name = "f3dex_fifo",  vram = 0x800AC4D0, size = 0x1390 },
+  { name = "l3dex_fifo",  vram = 0x800AD860, size = 0x1190 },
+]
+cop2_note    = "6x mtc2 + 3x mfc2, one function 0x800454A8-0x800454DC"
+pack_quirks  = ["pack 8: 8-byte payload is stored 'packed' as 12 bytes; rnc_propack refuses to expand (error 2) -> keep as bin"]
+
+[thps2_eu]
+# Europe (probed 2026-10-11, the private development notes "V1"): a re-link of the USA program, not the same
+# code. Rodata grows 0x30 bytes (strings: legal text, controller message), five functions in the upper
+# .text change (the TV-type accessor's sense, text/message code), so every main address from 0x80019C54
+# up moves by +0x20..+0xC0 and 8 of the 16 front-end overlays differ. Its own payload (code_class eu).
+inherits     = "thps2"
+title        = "Tony Hawk's Pro Skater 2 (E)"
+rom_sha1     = "803672c1ffa7860536d8b35dca8b59f637f4165e"
+rom_md5      = "6be030475c4db52f273ef8a02b4dafa8"
+rom_xxh3     = "F32FEE0FC9FE5F6A"
+game_id      = "thps2.n64.eu"
+display_name = "Tony Hawk's Pro Skater 2 (Europe)"
+game_code    = "NTQP"
+code_class   = "eu"
+tv_default   = "ntsc"          # ADR 0004: PAL releases run at NTSC timing; --tv pal is experimental
+status       = "supported"
+refs_from    = "thps2"
+rom_names    = ["Tony Hawk's Pro Skater 2 (Europe).z64", "Tony Hawk's Pro Skater 2 (E).z64"]
+main_size    = 0xE7ED0
+main_sha1    = "06f137c5f19dbbcc9c3ed214ade941f5f3b97992"
+game_bss_end = 0x80102320      # boot main clears 0x800FE930..0x80102320 (USA ..0x80102260)
+entry        = 0x800B6B28      # GameEntry (USA 0x800B6AF8)
+asset_root   = 0x79808
+main_text    = [[0x80020F80, 0x800AB7D0], [0x800AEA20, 0x800DACB0]]
+main_data_vram = 0x800DACB0
+ucode        = [
+  { name = "n_aspMain",   vram = 0x800AB7D0, size = 0xC60 },
+  { name = "rspboot",     vram = 0x800AC430, size = 0xD0 },
+  { name = "f3dex_fifo",  vram = 0x800AC500, size = 0x1390 },
+  { name = "l3dex_fifo",  vram = 0x800AD890, size = 0x1190 },
+]
+cop2_note    = "the same 6x mtc2 + 3x mfc2 function as USA, moved +0x30 (found by sigmatch)"
+
+[thps3]
+# Probed 2026-10-10, exercised by the tools 2026-10-11 (worker T3a, the private development notes). The one dump (USA, header revision 0).
+title        = "Tony Hawk's Pro Skater 3 (U)"
+rom_sha1     = "7b9438120c67214afaea09f4b106c54ef8f366c5"
+rom_md5      = "9d4891bf26881c4541171b0235015fd4"
+rom_xxh3     = "4A295D7A2D8E9C55"
+game_id      = "thps3.n64.us"
+display_name = "Tony Hawk's Pro Skater 3 (USA)"
+code_class   = "us"
+tv_default   = "ntsc"
+status       = "supported"
+rom_names    = ["Tony Hawk's Pro Skater 3 (U).n64", "Tony Hawk's Pro Skater 3 (USA).z64"]
+rom_size     = 0x1000000
+header_name  = "THPS3"
+game_code    = "N3TE"
+revision     = 0
+boot_rom     = 0x1000
+boot_vram    = 0x80000400
+boot_end     = 0x80012F70
+main_vram    = 0x80016B20
+root_ptr     = 0x13B70
+stride       = 0x10000
+code_method  = 2
+n_chunks     = 15
+main_size    = 0xEBC30
+main_sha1    = "903e3f47035a23886720289739fa78f2cd03f9a1"
+game_bss_end = 0x80106080
+entry        = 0x800BACB8
+asset_root   = 0x7BA36
+n_packs      = 9
+boot_text    = [[0x80000400, 0x80000468], [0x80000870, 0x80011C50]]   # boot code == THPS2's but 3 words
+main_text    = [[0x8001FDD0, 0x800AF950], [0x800B2BA0, 0x800DF900]]
+boot_data_vram = 0x80011C50
+main_data_vram = 0x800DF900    # last jr ra 0x800DF8F0 (8-byte stub), delay slot, pad to 16
+ucode        = [
+  { name = "n_aspMain",   vram = 0x800AF950, size = 0xC60 },
+  { name = "rspboot",     vram = 0x800B05B0, size = 0xD0 },
+  { name = "f3dex_fifo",  vram = 0x800B0680, size = 0x1390 },
+  { name = "l3dex_fifo",  vram = 0x800B1A10, size = 0x1190 },
+]
+cop2_note    = "6x mtc2 + 3x mfc2, one function 0x80045D38-0x80045D6C (called)"
+pack_quirks  = ["pack 8: 8-byte payload stored 'packed' as 12 bytes (same as THPS2)"]

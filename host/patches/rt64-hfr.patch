@@ -1,0 +1,199 @@
+diff --git a/src/hle/rt64_hfr_stats.h b/src/hle/rt64_hfr_stats.h
+new file mode 100644
+index 0000000..322c1d6
+--- /dev/null
++++ b/src/hle/rt64_hfr_stats.h
+@@ -0,0 +1,37 @@
++//
++// RT64
++//
++// [thps-recomp] Frame-interpolation counters (pairing of transforms between game frames, frames
++// generated), read by the host for its perf log. Written only by the workload thread.
++
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++#include <mutex>
++#include <vector>
++
++namespace RT64 {
++    struct HfrStats {
++        std::atomic<uint64_t> framesMatched{ 0 };       // Game frames that went through GameFrame::match.
++        std::atomic<uint64_t> framesInterpolating{ 0 }; // ...of which generated interpolated frames.
++        std::atomic<uint64_t> transforms{ 0 };          // World transforms seen in matched frames.
++        std::atomic<uint64_t> transformsPaired{ 0 };    // ...paired with one of the previous frame (interpolated).
++        std::atomic<uint64_t> transformsSkipped{ 0 };   // ...tagged G_EX_ID_IGNORE (never interpolated).
++        std::atomic<uint64_t> viewProjs{ 0 };           // View-projections seen in matched frames.
++        std::atomic<uint64_t> viewProjsPaired{ 0 };     // ...paired (camera interpolated).
++        std::atomic<uint64_t> displayFrames{ 0 };       // Frames rendered for presentation (interpolated included).
++        std::atomic<uint64_t> displayFramesDropped{ 0 };// Interpolated frames skipped for lack of time.
++        std::atomic<uint64_t> workloads{ 0 };           // Workloads (game frames) rendered.
++        std::atomic<uint64_t> renderMicros{ 0 };        // Time spent rendering them (all display frames, GPU waits included).
++        std::atomic<uint64_t> renderMicrosMax{ 0 };     // Longest single workload (reset by the reader).
++
++        // Debugging: when collect is set, the next matched frame's world transforms are stored as
++        // (physical matrix address << 2) | (paired ? 1 : 0) | (skipped ? 2 : 0), then collect is cleared.
++        std::atomic<bool> collect{ false };
++        std::mutex collectedMutex;
++        std::vector<uint64_t> collected;
++    };
++
++    extern HfrStats hfrStats;
++};
+diff --git a/src/hle/rt64_interpreter.cpp b/src/hle/rt64_interpreter.cpp
+index dccaa87..dc799b5 100644
+--- a/src/hle/rt64_interpreter.cpp
++++ b/src/hle/rt64_interpreter.cpp
+@@ -172,6 +172,10 @@ namespace RT64 {
+         while (dl != nullptr) {
+             opCode = (dl->w0 >> 24);
+ 
++            if (commandHook != nullptr) {
++                commandHook(commandHookUser, state, uint32_t(reinterpret_cast<const uint8_t *>(dl) - state->RDRAM), dl->w0, dl->w1);
++            }
++
+             if ((extendedOpCode != 0) && (opCode == extendedOpCode)) {
+                 extendedFunction(state, &dl);
+             }
+diff --git a/src/hle/rt64_interpreter.h b/src/hle/rt64_interpreter.h
+index c29e4b2..a77dfa9 100644
+--- a/src/hle/rt64_interpreter.h
++++ b/src/hle/rt64_interpreter.h
+@@ -17,6 +17,12 @@ namespace RT64 {
+         uint8_t extendedOpCode = 0;
+         GBIFunction extendedFunction = nullptr;
+ 
++        // [thps-recomp] Called before each HLE display-list command with its RDRAM address and words. The host
++        // uses it to tag transforms (RSP::matrixId / popMatrixId) at known places in the game's lists without
++        // writing extended-GBI commands into game memory.
++        void (*commandHook)(void *user, State *state, uint32_t rdramAddress, uint32_t w0, uint32_t w1) = nullptr;
++        void *commandHookUser = nullptr;
++
+         struct {
+             uint32_t textAddress = 0;
+             uint32_t dataAddress = 0;
+diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
+index 5a331aa..00a858a 100644
+--- a/src/hle/rt64_workload_queue.cpp
++++ b/src/hle/rt64_workload_queue.cpp
+@@ -7,10 +7,13 @@
+ #include "common/rt64_thread.h"
+ 
+ #include "rt64_present_queue.h"
++#include "rt64_hfr_stats.h"
+ 
+ #define ENABLE_HIGH_RESOLUTION_RENDERER 1
+ 
+ namespace RT64 {
++    HfrStats hfrStats;
++
+     // WorkloadQueue
+ 
+     WorkloadQueue::WorkloadQueue() {
+@@ -505,6 +508,11 @@ namespace RT64 {
+             thread_local std::unordered_set<RenderTarget *> resizedTargets;
+             thread_local std::vector<std::pair<RenderTarget *, RenderTarget *>> colorDepthPairs;
+             resizedTargets.clear();
++            // [thps-recomp] New colour textures aren't guaranteed to be cleared (Metal): with MSAA in widescreen the
++            // columns the game never draws showed garbage (magenta) at the right edge. Cleared to black once the
++            // command list is open (below).
++            thread_local std::unordered_set<RenderTarget *> newColorTargets;
++            newColorTargets.clear();
+             colorDepthPairs.clear();
+ 
+             const uint32_t fbPairCount = (debuggerRenderer.framebufferIndex >= 0) ? (debuggerRenderer.framebufferIndex + 1) : workload.fbPairCount;
+@@ -539,6 +547,7 @@ namespace RT64 {
+                     }
+ 
+                     if ((colorTarget != nullptr) && colorTarget->resize(ext.workloadGraphicsWorker, rtWidth, rtHeight)) {
++                        newColorTargets.emplace(colorTarget);
+                         resizedTargets.emplace(colorTarget);
+                         colorFb->readHeight = 0;
+                     }
+@@ -699,6 +708,9 @@ namespace RT64 {
+ 
+             workerMutex.lock();
+             ext.workloadGraphicsWorker->commandList->begin();
++            for (RenderTarget *renderTarget : newColorTargets) {
++                renderTarget->clearColorTarget(ext.workloadGraphicsWorker);
++            }
+             ext.workloadGraphicsWorker->commandList->resetQueryPool(queryPool.get(), 0, 2);
+             ext.workloadGraphicsWorker->commandList->writeTimestamp(queryPool.get(), 0);
+             framebufferRenderer->endFramebuffers(ext.workloadGraphicsWorker, &workload.drawBuffers, &workload.outputBuffers, workloadConfig.raytracingEnabled);
+@@ -988,6 +1000,50 @@ namespace RT64 {
+                     const bool displayRateAboveOriginal = (workload.viOriginalRate > 0) && (workloadConfig.targetRate > workload.viOriginalRate);
+                     generateInterpolatedFrames = !workload.paused && displayRateAboveOriginal && !interpolationTargetKey.isEmpty();
+ 
++                    // [thps-recomp] Pairing counters.
++                    {
++                        uint64_t transforms = 0, paired = 0, skipped = 0, viewProjs = 0, viewProjsPaired = 0;
++                        for (uint32_t w : curFrame.workloads) {
++                            const GameFrameMap::WorkloadMap &workloadMap = curFrame.frameMap.workloads[w];
++                            transforms += workloadMap.transforms.size();
++                            for (const GameFrameMap::TransformMap &t : workloadMap.transforms) {
++                                paired += t.mapped ? 1 : 0;
++                            }
++
++                            skipped += workloads[w].transformIgnoredIds.size();
++                            viewProjs += workloadMap.viewProjections.size();
++                            for (const GameFrameMap::ViewProjectionMap &v : workloadMap.viewProjections) {
++                                viewProjsPaired += v.mapped ? 1 : 0;
++                            }
++                        }
++
++                        if (hfrStats.collect.load() && !curFrame.workloads.empty()) {
++                            const uint32_t w = curFrame.workloads[0];
++                            const GameFrameMap::WorkloadMap &workloadMap = curFrame.frameMap.workloads[w];
++                            const Workload &cw = workloads[w];
++                            std::vector<bool> ignored(workloadMap.transforms.size(), false);
++                            for (uint32_t i : cw.transformIgnoredIds) {
++                                if (i < ignored.size()) ignored[i] = true;
++                            }
++
++                            std::scoped_lock<std::mutex> collectLock(hfrStats.collectedMutex);
++                            hfrStats.collected.clear();
++                            for (size_t i = 0; i < workloadMap.transforms.size() && i < cw.drawData.worldTransformPhysicalAddresses.size(); i++) {
++                                hfrStats.collected.push_back((uint64_t(cw.drawData.worldTransformPhysicalAddresses[i]) << 2) | (workloadMap.transforms[i].mapped ? 1 : 0) | (ignored[i] ? 2 : 0));
++                            }
++
++                            hfrStats.collect = false;
++                        }
++
++                        hfrStats.framesMatched++;
++                        hfrStats.framesInterpolating += generateInterpolatedFrames ? 1 : 0;
++                        hfrStats.transforms += transforms;
++                        hfrStats.transformsPaired += paired;
++                        hfrStats.transformsSkipped += skipped;
++                        hfrStats.viewProjs += viewProjs;
++                        hfrStats.viewProjsPaired += viewProjsPaired;
++                    }
++
+                     const bool resetTicks = !generateInterpolatedFrames || (originalRateForTicks != workload.viOriginalRate) || (displayRateForTicks != workloadConfig.targetRate) || !displayRateAboveOriginal;
+                     if (resetTicks) {
+                         logicalTicks = 0;
+@@ -1073,6 +1129,7 @@ namespace RT64 {
+                         if ((currentTimeMicro > expectedTimeMicro) || ((currentTimeMicro + measuredFrameMicro) > adjustedTimeWindowMicro)) {
+                             displayTicks += workload.viOriginalRate;
+                             skippedFrames = true;
++                            hfrStats.displayFramesDropped++;
+                             continue;
+                         }
+                     }
+@@ -1150,6 +1207,16 @@ namespace RT64 {
+                     }
+ 
+                     framesRendered++;
++                    hfrStats.displayFrames++;
++                }
++
++                // [thps-recomp] Render time of this workload (all of its display frames).
++                hfrStats.workloads++;
++                hfrStats.renderMicros += uint64_t(renderTimeTotalMicro);
++                {
++                    uint64_t prevMax = hfrStats.renderMicrosMax.load();
++                    while ((uint64_t(renderTimeTotalMicro) > prevMax) && !hfrStats.renderMicrosMax.compare_exchange_weak(prevMax, uint64_t(renderTimeTotalMicro))) {
++                    }
+                 }
+ 
+                 // Set the skipped parameter on the frame counter if the workload wasn't skipped but some of its frames were.

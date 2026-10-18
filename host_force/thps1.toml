@@ -1,0 +1,24 @@
+# Host-forced names for THPS1 (copied from recomp-host/tools/gen_host_syms.py FORCE/SPLITS).
+
+splits = [0x800B3C20]   # `jr ra; li v0,1` after the endless thread loop func_800B3BC8
+
+[force]
+"0x80000400" = "Boot_Entry"
+"0x80000870" = "Boot_Main"
+"0x80000AA0" = "Boot_PioCopy"
+"0x80000B08" = "Erz_Unpack"
+"0x80000C40" = "Erz_UnpackMethod2"
+"0x80001330" = "Erz_UnpackMethod1"
+"0x80002E00" = "thps_osSetEventMesg"
+"0x80004770" = "thps_osPiRawStartDma"
+"0x80010A40" = "thps_osAiGetStatus"
+"0x80007574" = "thps_osContGetQuery"
+"0x8005D0B0" = "func_8005D0B0"   # COP2 instruction patches (host toml)
+"0x8006F574" = "func_8006F574"   # ignored (uncalled, COP2)
+"0x800BAE84" = "Pi_DmaThread"
+"0x800C0480" = "GameEntry"
+# Widescreen / skip intro (names are ours, by what the code does):
+"0x800A4418" = "View_SetFrustum"   # glFrustum(view, l, r, b, t, n, f) -> view+0xA0 matrix, l..f at +0x160
+"0x800A4EBC" = "View_ComputeCullPlanes"   # frustum corners at the far plane -> view-space cull planes (+0x188..)
+"0x800979CC" = "Front_NoticeUpdate"   # pak/notice message screen (vtable 0x80020860): the boot Expansion Pak notice
+"0x8002A588" = "Front_IntroUpdate"   # legal screen + logo videos (vtable 0x80019270); returns 3 = go to the title

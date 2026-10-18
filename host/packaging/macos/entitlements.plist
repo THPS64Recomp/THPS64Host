@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Entitlements for THPS1's macOS app (tools/package_split.py signs with these, hardened runtime on, ad hoc today).
+     Kept to the minimum; each key says why. A notarized build would use the same file with a Developer ID.
+     NOT present, on purpose:
+       com.apple.security.cs.allow-jit  the split build runs ahead-of-time compiled code; only the LiveRecomp fallback
+                                        (THPS_LIVERECOMP, not shipped) maps executable memory (MAP_JIT)
+       com.apple.security.app-sandbox   the app runs a compiler (Command Line Tools) and writes a library next to itself -->
+<plist version="1.0">
+<dict>
+    <!-- First run compiles the game library on the user's Mac and dlopen()s it. ld64 signs that library ad hoc, with no
+         Team ID, so under the hardened runtime library validation would refuse it (and our own bundled libSDL2.dylib,
+         which is also ad hoc today). -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

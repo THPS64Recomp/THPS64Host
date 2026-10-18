@@ -1,0 +1,446 @@
+RT64 4337374 + plume d890ac8: present capture and widescreen fixes for the THPS1 recomp host
+(apply after rt64-hlslpp-labs.patch).
+
+  patch -p1 -d vendor/recomp-runtime/lib/rt64 < decomp/thps1/recomp-host/patches/rt64-present-capture-widescreen.patch
+
+1. Present capture (PresentQueue::captureCallback / captureEvery / captureNext / captureWidth/Height):
+   every Nth composited frame is drawn again by the VI renderer into an offscreen BGRA8 target
+   (same input as the swap chain: resolved MSAA or downsampled target, VI scaling, filtering) and
+   copied to a readback buffer; the callback gets the pixels on the present thread.
+   PresentQueue::swapChainEnabled = false composites (and captures) without touching the swap
+   chain (occluded or hidden windows). presentedFrameCount / windowPresentCount count frames.
+   VIRenderer::RenderParams::targetWidth/Height lets the VI pass target something other than the
+   swap chain. plume copyTextureRegion texture -> buffer (the readback), per backend:
+     Metal   new branch (blit copyFromTexture): in use since Q16.
+     D3D12   plume already converts a buffer footprint destination, but called setSamplePositions(dst.texture)
+             first, which dereferences null for a buffer destination (Windows port, Q24): now takes the
+             source texture when the destination is a buffer.
+     Vulkan  the function had only buffer->image and image->image branches, so a buffer destination
+             dereferenced null: new branch (vkCmdCopyImageToBuffer). (Q24)
+   The D3D12 and Vulkan changes are written from the plume sources and compile, but have not run on
+   hardware. The capture is only armed by --control / --present-dump-every / latency / edges
+   (PresentQueue::captureEvery, captureNext), never in normal play.
+2. Widescreen: a 1/32-width slack in the "covers the whole width" tests for wide viewports
+   (FramebufferRenderer and ProjectionProcessor) and for full-width fill rects. THPS1 scissors
+   its 3D and clears its depth buffer 8 px in from each side of a 320 px frame; without the slack
+   its projection isn't widened (pillarbox) and the depth clear isn't stretched (the sides keep
+   stale depth and stay black).
+   RT64_DEBUG_WIDESCREEN=N logs the widening decision per projection every Nth pair.
+3. (Q17) PresentQueue::captureUi: the render hook (RecompFrontend's recompui UI) is drawn into
+   present captures too, and offscreen every frame while the swap chain is off, so menus keep
+   updating in a hidden/occluded window and captures show them. Off unless the host sets it.
+Patched lines are marked [thps-recomp].
+
+diff --git a/src/hle/rt64_present_queue.cpp b/src/hle/rt64_present_queue.cpp
+index 7de5b69..239ec70 100644
+--- a/src/hle/rt64_present_queue.cpp
++++ b/src/hle/rt64_present_queue.cpp
+@@ -298,8 +298,29 @@ namespace RT64 {
+                 frameCountersNextPresented = frameCounters.count;
+             }
+ 
++            // [thps-recomp] Present capture: composite this frame into an offscreen target and read it back,
++            // independently of the swap chain (so it also works while presents to the window are disabled).
++            if (i < framesToPresent) {
++                const uint64_t presentIndex = presentedFrameCount.fetch_add(1);
++                const uint32_t every = captureEvery.load();
++                const bool captureOnce = captureNext.load() && (colorTarget != nullptr);
++                const bool captureDue = captureOnce || ((every > 0) && ((presentIndex % every) == 0));
++                // With captureUi, the render hook's UI (recompui) is drawn into the capture too; and while the
++                // swap chain is off (hidden/occluded window) it is drawn offscreen every frame, so the UI keeps
++                // updating (and handling input) as it would on screen.
++                const bool shown = swapChainValid && swapChainEnabled;
++                const bool uiHook = captureUi.load() && (GetRenderHookDraw() != nullptr);
++                const bool readback = captureDue && captureCallback;
++                if ((colorTarget != nullptr) && (readback || (uiHook && !shown))) {
++                    if (readback) {
++                        captureNext = false;
++                    }
++                    threadCapture(colorTarget, present, filtering, removeBlackBorders, presentIndex, shown, readback, uiHook);
++                }
++            }
++
+             uint32_t swapChainIndex = 0;
+-            const bool presentFrame = (i < framesToPresent) && swapChainValid;
++            const bool presentFrame = (i < framesToPresent) && swapChainValid && swapChainEnabled;
+             if (presentFrame) {
+                 swapChainValid = ext.swapChain->acquireTexture(acquiredSemaphore.get(), &swapChainIndex);
+             }
+@@ -402,11 +423,112 @@ namespace RT64 {
+                 RenderCommandSemaphore *waitSemaphore = drawSemaphores[swapChainIndex].get();
+                 presentTimestamp = Timer::current();
+                 swapChainValid = ext.swapChain->present(swapChainIndex, &waitSemaphore, 1);
++                windowPresentCount++;
+                 presentProfiler.logAndRestart();
+             }
+         }
+     }
+ 
++    void PresentQueue::threadCapture(RenderTarget *colorTarget, const Present &present, UserConfiguration::Filtering filtering, bool removeBlackBorders, uint64_t presentIndex, bool shownInWindow, bool readback, bool drawUi) {
++        uint32_t width = captureWidth;
++        uint32_t height = captureHeight;
++        if ((width == 0) || (height == 0)) {
++            width = ext.swapChain->getWidth();
++            height = ext.swapChain->getHeight();
++        }
++
++        if ((width == 0) || (height == 0)) {
++            return;
++        }
++
++        const RenderFormat captureFormat = RenderFormat::B8G8R8A8_UNORM; // Same as the VI pipelines and the swap chain.
++        if ((captureTexture == nullptr) || (captureTextureWidth != width) || (captureTextureHeight != height)) {
++            captureFramebuffer.reset();
++            captureTexture = ext.device->createTexture(RenderTextureDesc::ColorTarget(width, height, captureFormat));
++            const RenderTexture *captureTexturePtr = captureTexture.get();
++            captureFramebuffer = ext.device->createFramebuffer(RenderFramebufferDesc(&captureTexturePtr, 1));
++            captureRowPitch = ((width * 4) + 255) & ~255U;
++            captureReadback = ext.device->createBuffer(RenderBufferDesc::ReadbackBuffer(uint64_t(captureRowPitch) * height));
++            captureTextureWidth = width;
++            captureTextureHeight = height;
++        }
++
++        RenderCommandList *commandList = ext.presentGraphicsWorker->commandList.get();
++        commandList->begin();
++        commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(captureTexture.get(), RenderTextureLayout::COLOR_WRITE));
++
++        VIRenderer::RenderParams renderParams;
++        renderParams.device = ext.device;
++        renderParams.commandList = commandList;
++        renderParams.swapChain = ext.swapChain;
++        renderParams.shaderLibrary = ext.shaderLibrary;
++        renderParams.textureFormat = colorTarget->format;
++        renderParams.resolutionScale = colorTarget->resolutionScale;
++        renderParams.downsamplingScale = 1;
++        renderParams.filtering = filtering;
++        renderParams.vi = &present.screenVI;
++        renderParams.removeBlackBorders = removeBlackBorders;
++        renderParams.targetWidth = width;
++        renderParams.targetHeight = height;
++        if (colorTarget->downsampleMultiplier > 1) {
++            colorTarget->downsampleTarget(ext.presentGraphicsWorker, ext.shaderLibrary);
++            renderParams.texture = colorTarget->downsampledTexture.get();
++            renderParams.textureWidth = colorTarget->width / colorTarget->downsampleMultiplier;
++            renderParams.textureHeight = colorTarget->height / colorTarget->downsampleMultiplier;
++            renderParams.downsamplingScale = colorTarget->downsampleMultiplier;
++        }
++        else {
++            colorTarget->resolveTarget(ext.presentGraphicsWorker, ext.shaderLibrary);
++            renderParams.texture = colorTarget->getResolvedTexture();
++            renderParams.textureWidth = colorTarget->width;
++            renderParams.textureHeight = colorTarget->height;
++        }
++
++        commandList->setFramebuffer(captureFramebuffer.get());
++        commandList->clearColor();
++        if (renderParams.texture != nullptr) {
++            commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(renderParams.texture, RenderTextureLayout::SHADER_READ));
++            viRenderer->render(renderParams);
++        }
++
++        if (drawUi) {
++            RenderHookDraw *drawHook = GetRenderHookDraw();
++            if (drawHook != nullptr) {
++                drawHook(commandList, captureFramebuffer.get());
++            }
++        }
++
++        if (readback) {
++            commandList->barriers(RenderBarrierStage::COPY, RenderTextureBarrier(captureTexture.get(), RenderTextureLayout::COPY_SOURCE));
++            commandList->copyTextureRegion(
++                RenderTextureCopyLocation::PlacedFootprint(captureReadback.get(), captureFormat, width, height, 1, captureRowPitch / 4),
++                RenderTextureCopyLocation::Subresource(captureTexture.get()));
++        }
++        commandList->end();
++        ext.presentGraphicsWorker->execute();
++        ext.presentGraphicsWorker->wait();
++        if (!readback) {
++            return;
++        }
++
++        Capture capture;
++        capture.bgra = reinterpret_cast<const uint8_t *>(captureReadback->map());
++        capture.width = width;
++        capture.height = height;
++        capture.rowPitch = captureRowPitch;
++        capture.presentIndex = presentIndex;
++        capture.shownInWindow = shownInWindow;
++        capture.fbAddress = present.screenVI.fbAddress();
++        capture.fbWidth = present.screenVI.fbSize().x;
++        capture.fbHeight = present.screenVI.fbSize().y;
++        capture.fbSiz = present.screenVI.fbSiz();
++        if (capture.bgra != nullptr) {
++            captureCallback(capture);
++            captureReadback->unmap();
++            captureCount++;
++        }
++    }
++
+     void PresentQueue::skipInterpolation() {
+         {
+             std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
+diff --git a/src/hle/rt64_present_queue.h b/src/hle/rt64_present_queue.h
+index e08b02c..4e77a54 100644
+--- a/src/hle/rt64_present_queue.h
++++ b/src/hle/rt64_present_queue.h
+@@ -4,6 +4,8 @@
+ 
+ #pragma once
+ 
++#include <functional>
++
+ #include "common/rt64_profiling_timer.h"
+ #include "gui/rt64_inspector.h"
+ #include "render/rt64_vi_renderer.h"
+@@ -58,6 +60,39 @@ namespace RT64 {
+         VIHistory viHistory;
+         bool presentWaitEnabled = false;
+ 
++        // [thps-recomp] Present capture: the final composited image (after upscaling, MSAA resolve or
++        // downsampling, and the VI pass), i.e. what the swap chain shows, copied to the CPU. It is rendered
++        // into its own target, so it works whether or not the frame is presented to the window.
++        struct Capture {
++            const uint8_t *bgra = nullptr; // B8G8R8A8 rows.
++            uint32_t width = 0;
++            uint32_t height = 0;
++            uint32_t rowPitch = 0;
++            uint64_t presentIndex = 0;     // Value of presentedFrameCount for this frame.
++            bool shownInWindow = false;
++            uint32_t fbAddress = 0;        // The VI framebuffer this frame shows (its native copy is in RDRAM).
++            uint32_t fbWidth = 0;
++            uint32_t fbHeight = 0;
++            uint8_t fbSiz = 0;
++        };
++
++        std::function<void(const Capture &)> captureCallback; // Set before the first present.
++        std::atomic<uint32_t> captureEvery = 0;               // Capture every Nth composited frame (0 = off).
++        std::atomic<bool> captureNext = false;                // Capture the next composited frame once.
++        std::atomic<uint32_t> captureWidth = 0;               // Capture size; 0 = the swap chain's size.
++        std::atomic<uint32_t> captureHeight = 0;
++        std::atomic<bool> swapChainEnabled = true;            // False: composite (and capture) but never touch the swap chain.
++        std::atomic<bool> captureUi = false;                  // Draw the render hook (UI) into captures, and offscreen while not shown.
++        std::atomic<uint64_t> presentedFrameCount = 0;        // Frames composited for presentation (interpolated ones included).
++        std::atomic<uint64_t> windowPresentCount = 0;         // Of those, frames actually presented to the swap chain.
++        std::atomic<uint64_t> captureCount = 0;
++        std::unique_ptr<RenderTexture> captureTexture;
++        std::unique_ptr<RenderFramebuffer> captureFramebuffer;
++        std::unique_ptr<RenderBuffer> captureReadback;
++        uint32_t captureTextureWidth = 0;
++        uint32_t captureTextureHeight = 0;
++        uint32_t captureRowPitch = 0;
++
+         PresentQueue();
+         ~PresentQueue();
+         void reset();
+@@ -68,6 +103,7 @@ namespace RT64 {
+         void waitForPresentId(uint64_t waitId);
+         void setup(const External &ext);
+         void threadPresent(const Present &present, bool &swapChainValid);
++        void threadCapture(RenderTarget *colorTarget, const Present &present, UserConfiguration::Filtering filtering, bool removeBlackBorders, uint64_t presentIndex, bool shownInWindow, bool readback, bool drawUi);
+         void skipInterpolation();
+         void notifyPresentId(const Present &present);
+         void threadAdvanceBarrier();
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index 9fae0d4..05af1d7 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -1488,9 +1488,26 @@ namespace RT64 {
+                 // The call's scissor spans the whole width of the framebuffer pair scissor. Custom origin must not be in use to be able to use the stretched viewport.
+                 const auto &viewport = drawData.rspViewports[proj.transformsIndex];
+                 FixedRect intersectionRect = proj.scissorRect.intersection(viewport.rect(viewportClipRatios));
+-                bool coversWholeWidth = !intersectionRect.isEmpty() && (intersectionRect.ulx <= fbPair.scissorRect.ulx) && (intersectionRect.lrx >= fbPair.scissorRect.lrx);
++                // [thps-recomp] Allow a small inset (1/32 of the width on each side): THPS1 scissors its 3D 8 px in from the
++                // edges of its 320 px frame, while its full-width clears make the pair's scissor span the whole frame.
++                const int32_t wideSlack = (fbPair.scissorRect.lrx - fbPair.scissorRect.ulx) / 32;
++                bool coversWholeWidth = !intersectionRect.isEmpty() && (intersectionRect.ulx <= (fbPair.scissorRect.ulx + wideSlack)) && ((intersectionRect.lrx + wideSlack) >= fbPair.scissorRect.lrx);
+                 bool horizontalRatio = !intersectionRect.isEmpty() && (intersectionRect.width(true, true) > intersectionRect.height(true, true));
+                 bool useWideViewport = (viewportOrigin == G_EX_ORIGIN_NONE) && coversWholeWidth && horizontalRatio;
++                // [thps-recomp] RT64_DEBUG_WIDESCREEN=N: log the widening decision of every projection, every Nth framebuffer pair.
++                static const int debugWideEvery = getenv("RT64_DEBUG_WIDESCREEN") ? atoi(getenv("RT64_DEBUG_WIDESCREEN")) : 0;
++                static uint64_t debugWideCounter = 0;
++                if ((debugWideEvery > 0) && (pr == 0)) {
++                    debugWideCounter++;
++                }
++                if ((debugWideEvery > 0) && ((debugWideCounter % debugWideEvery) == 0)) {
++                    const FixedRect vr = viewport.rect(viewportClipRatios);
++                    fprintf(stdout, "[rt64-wide] pair scissor %d,%d-%d,%d ratio %.3f src %.3f adjust %d | proj %u type %d calls %u scissor %d,%d-%d,%d viewport %d,%d-%d,%d origin %u covers %d horiz %d wide %d\n",
++                        fbPair.scissorRect.ulx, fbPair.scissorRect.uly, fbPair.scissorRect.lrx, fbPair.scissorRect.lry, scissorRatio, p.aspectRatioSource, adjustRatio,
++                        pr, int(proj.type), proj.gameCallCount, proj.scissorRect.ulx, proj.scissorRect.uly, proj.scissorRect.lrx, proj.scissorRect.lry,
++                        vr.ulx, vr.uly, vr.lrx, vr.lry, viewportOrigin, coversWholeWidth, horizontalRatio, useWideViewport);
++                    fflush(stdout);
++                }
+                 if (useWideViewport) {
+                     projInvRatioScale = 1.0f;
+                 }
+@@ -1539,7 +1556,10 @@ namespace RT64 {
+                     int32_t horizontalMisalignment = 0;
+ 
+                     // A rect that spans the whole width of the scissor.
+-                    if ((call.callDesc.rect.ulx <= fbPair.scissorRect.ulx) && (call.callDesc.rect.lrx >= fbPair.scissorRect.lrx)) {
++                    // [thps-recomp] With the same 1/32-width slack as wide viewports: THPS1 clears its depth buffer with
++                    // a fill rect inset 8 px like its 3D scissor; unstretched, the sides keep stale depth and stay black.
++                    const int32_t fillSlack = (fbPair.scissorRect.lrx - fbPair.scissorRect.ulx) / 32;
++                    if ((call.callDesc.rect.ulx <= (fbPair.scissorRect.ulx + fillSlack)) && ((call.callDesc.rect.lrx + fillSlack) >= fbPair.scissorRect.lrx)) {
+                         invRatioScale = 1.0f;
+                     }
+                     // A regular rectangle that should correct its misalignment.
+diff --git a/src/render/rt64_projection_processor.cpp b/src/render/rt64_projection_processor.cpp
+index e842dcc..2644f2c 100644
+--- a/src/render/rt64_projection_processor.cpp
++++ b/src/render/rt64_projection_processor.cpp
+@@ -92,7 +92,9 @@ namespace RT64 {
+                 }
+ 
+                 if (!intersectionRect.isEmpty()) {
+-                    bool coversWholeWidth = (intersectionRect.ulx <= fbPair.scissorRect.ulx) && (intersectionRect.lrx >= fbPair.scissorRect.lrx);
++                    // [thps-recomp] Same 1/32-width slack as FramebufferRenderer (THPS1 insets its 3D scissor by 8 px).
++                    const int32_t wideSlack = (fbPair.scissorRect.lrx - fbPair.scissorRect.ulx) / 32;
++                    bool coversWholeWidth = (intersectionRect.ulx <= (fbPair.scissorRect.ulx + wideSlack)) && ((intersectionRect.lrx + wideSlack) >= fbPair.scissorRect.lrx);
+                     bool horizontalRatio = (intersectionRect.width(true, true) > intersectionRect.height(true, true));
+                     adjustAspectRatio = (viewportOrigin == G_EX_ORIGIN_NONE) && coversWholeWidth && horizontalRatio;
+                 }
+diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
+index b4ff4e9..b87867f 100644
+--- a/src/render/rt64_vi_renderer.cpp
++++ b/src/render/rt64_vi_renderer.cpp
+@@ -69,7 +69,12 @@ namespace RT64 {
+ 
+         RenderViewport viewport;
+         RenderRect scissor;
+-        getViewportAndScissor(p.swapChain, *p.vi, p.resolutionScale, p.downsamplingScale, p.removeBlackBorders, viewport, scissor);
++        if ((p.targetWidth > 0) && (p.targetHeight > 0)) {
++            getViewportAndScissor(hlslpp::float2(float(p.targetWidth), float(p.targetHeight)), *p.vi, p.resolutionScale, p.downsamplingScale, p.removeBlackBorders, viewport, scissor);
++        }
++        else {
++            getViewportAndScissor(p.swapChain, *p.vi, p.resolutionScale, p.downsamplingScale, p.removeBlackBorders, viewport, scissor);
++        }
+         p.commandList->setViewports(viewport);
+         p.commandList->setScissors(scissor);
+ 
+@@ -87,6 +92,10 @@ namespace RT64 {
+     }
+ 
+     void VIRenderer::getViewportAndScissor(const RenderSwapChain *swapChain, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, bool removeBlackBorders, RenderViewport &viewport, RenderRect &scissor) {
++        getViewportAndScissor(hlslpp::float2(float(swapChain->getWidth()), float(swapChain->getHeight())), vi, resolutionScale, downsamplingScale, removeBlackBorders, viewport, scissor);
++    }
++
++    void VIRenderer::getViewportAndScissor(hlslpp::float2 windowSize, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, bool removeBlackBorders, RenderViewport &viewport, RenderRect &scissor) {
+         // We define three different coordinate spaces to work with to translate the VI parameters into the Window.
+         //
+         // VideoSD: This corresponds to the SD TV Scanline space, which is what the VI natively works on.
+@@ -102,7 +111,6 @@ namespace RT64 {
+         // specified by the VI.
+         const hlslpp::float2 sdSize = removeBlackBorders ? hlslpp::float2(vi.fbSize()) : hlslpp::float2(320.0f, 240.0f);
+         const hlslpp::float2 hdSize = computeHDSize(sdSize, resolutionScale, downsamplingScale);
+-        const hlslpp::float2 windowSize = { float(swapChain->getWidth()), float(swapChain->getHeight()) };
+ 
+         // Query the VI for the current rendering area.
+         hlslpp::float4 viViewRect = vi.viewRectangle() * sdSize.xyxy;
+diff --git a/src/render/rt64_vi_renderer.h b/src/render/rt64_vi_renderer.h
+index 8a3782a..398d165 100644
+--- a/src/render/rt64_vi_renderer.h
++++ b/src/render/rt64_vi_renderer.h
+@@ -29,11 +29,15 @@ namespace RT64 {
+             UserConfiguration::Filtering filtering = UserConfiguration::Filtering::Linear;
+             const VI *vi = nullptr;
+             bool removeBlackBorders = false;
++            // [thps-recomp] Size of the render target when it isn't the swap chain (present capture). 0 = swap chain size.
++            uint32_t targetWidth = 0;
++            uint32_t targetHeight = 0;
+         };
+ 
+         VIRenderer();
+         ~VIRenderer();
+         void render(const RenderParams &p);
+         static void getViewportAndScissor(const RenderSwapChain *swapChain, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, bool removeBlackBorders, RenderViewport &viewport, RenderRect &scissor);
++        static void getViewportAndScissor(hlslpp::float2 windowSize, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, bool removeBlackBorders, RenderViewport &viewport, RenderRect &scissor);
+     };
+ };
+\ No newline at end of file
+diff --git a/src/contrib/plume/plume_d3d12.cpp b/src/contrib/plume/plume_d3d12.cpp
+index 2cdcf18..5a499c4 100644
+--- a/src/contrib/plume/plume_d3d12.cpp
++++ b/src/contrib/plume/plume_d3d12.cpp
+@@ -2312,7 +2312,11 @@ namespace plume {
+ 
+         const D3D12_TEXTURE_COPY_LOCATION copyDstLocation = toD3D12(dstLocation);
+         const D3D12_TEXTURE_COPY_LOCATION copySrcLocation = toD3D12(srcLocation);
+-        setSamplePositions(dstLocation.texture);
++        // [thps-recomp] A readback copy has a buffer destination (no texture): take the sample positions from the source.
++        const RenderTexture *samplePositionsTexture = (dstLocation.texture != nullptr) ? dstLocation.texture : srcLocation.texture;
++        if (samplePositionsTexture != nullptr) {
++            setSamplePositions(samplePositionsTexture);
++        }
+         d3d->CopyTextureRegion(&copyDstLocation, dstX, dstY, dstZ, &copySrcLocation, (srcBox != nullptr) ? &copyBox : nullptr);
+         resetSamplePositions();
+     }
+diff --git a/src/contrib/plume/plume_metal.cpp b/src/contrib/plume/plume_metal.cpp
+index 373c87e..c2a48a0 100644
+--- a/src/contrib/plume/plume_metal.cpp
++++ b/src/contrib/plume/plume_metal.cpp
+@@ -3022,6 +3022,30 @@ namespace plume {
+                 dstOrigin
+             );
+             activeBlitEncoder->popDebugGroup();
++        } else if (dstLocation.type == RenderTextureCopyType::PLACED_FOOTPRINT && srcLocation.type == RenderTextureCopyType::SUBRESOURCE) {
++            // [thps-recomp] Texture -> buffer (readback). Used by RT64's present capture (plume D3D12 and Vulkan got their own branches too).
++            assert(dstBuffer != nullptr);
++            assert(srcTexture != nullptr);
++
++            const uint32_t blockWidth = RenderFormatBlockWidth(srcTexture->desc.format);
++            const MTL::Size size = { dstLocation.placedFootprint.width, dstLocation.placedFootprint.height, dstLocation.placedFootprint.depth };
++            const uint32_t horizontalBlocks = (dstLocation.placedFootprint.rowWidth + blockWidth - 1) / blockWidth;
++            const uint32_t verticalBlocks = (dstLocation.placedFootprint.height + blockWidth - 1) / blockWidth;
++            const uint32_t bytesPerRow = horizontalBlocks * RenderFormatSize(srcTexture->desc.format);
++            const uint32_t bytesPerImage = bytesPerRow * verticalBlocks;
++            const MTL::Origin srcOrigin = (srcBox != nullptr) ? MTL::Origin{ NS::UInteger(srcBox->left), NS::UInteger(srcBox->top), NS::UInteger(srcBox->front) } : MTL::Origin{ 0, 0, 0 };
++
++            activeBlitEncoder->copyFromTexture(
++                srcTexture->mtl,
++                srcLocation.subresource.arrayIndex,
++                srcLocation.subresource.mipLevel,
++                srcOrigin,
++                size,
++                dstBuffer->mtl,
++                dstLocation.placedFootprint.offset,
++                bytesPerRow,
++                bytesPerImage
++            );
+         } else {
+             assert(dstTexture != nullptr);
+             assert(srcTexture != nullptr);
+diff --git a/src/contrib/plume/plume_vulkan.cpp b/src/contrib/plume/plume_vulkan.cpp
+index f1dd503..da7546b 100644
+--- a/src/contrib/plume/plume_vulkan.cpp
++++ b/src/contrib/plume/plume_vulkan.cpp
+@@ -3229,6 +3229,30 @@ namespace plume {
+             imageCopy.imageExtent.depth = srcLocation.placedFootprint.depth;
+             vkCmdCopyBufferToImage(vk, srcBuffer->vk, dstTexture->vk, toImageLayout(dstTexture->textureLayout), 1, &imageCopy);
+         }
++        else if ((dstLocation.type == RenderTextureCopyType::PLACED_FOOTPRINT) && (srcLocation.type == RenderTextureCopyType::SUBRESOURCE)) {
++            // [thps-recomp] Texture -> buffer (readback), used by RT64's present capture. Not hardware-tested yet.
++            assert(dstBuffer != nullptr);
++            assert(srcTexture != nullptr);
++
++            const uint32_t blockWidth = RenderFormatBlockWidth(srcTexture->desc.format);
++            VkBufferImageCopy imageCopy = {};
++            imageCopy.bufferOffset = dstLocation.placedFootprint.offset;
++            imageCopy.bufferRowLength = ((dstLocation.placedFootprint.rowWidth + blockWidth - 1) / blockWidth) * blockWidth;
++            imageCopy.bufferImageHeight = ((dstLocation.placedFootprint.height + blockWidth - 1) / blockWidth) * blockWidth;
++            imageCopy.imageSubresource.aspectMask = toAspectFlags(srcTexture->desc.format, srcTexture->desc.flags);
++            imageCopy.imageSubresource.baseArrayLayer = srcLocation.subresource.arrayIndex;
++            imageCopy.imageSubresource.layerCount = 1;
++            imageCopy.imageSubresource.mipLevel = srcLocation.subresource.mipLevel;
++            if (srcBox != nullptr) {
++                imageCopy.imageOffset.x = srcBox->left;
++                imageCopy.imageOffset.y = srcBox->top;
++                imageCopy.imageOffset.z = srcBox->front;
++            }
++            imageCopy.imageExtent.width = dstLocation.placedFootprint.width;
++            imageCopy.imageExtent.height = dstLocation.placedFootprint.height;
++            imageCopy.imageExtent.depth = dstLocation.placedFootprint.depth;
++            vkCmdCopyImageToBuffer(vk, srcTexture->vk, toImageLayout(srcTexture->textureLayout), dstBuffer->vk, 1, &imageCopy);
++        }
+         else {
+             VkImageCopy imageCopy = {};
+             imageCopy.srcSubresource.aspectMask = toAspectFlags(srcTexture->desc.format, srcTexture->desc.flags);

@@ -1,0 +1,37 @@
+# Weekly: which THPS64Host release each game's main branch pins (its decomp/common submodule), as a table in the run summary, and ONE
+# drift issue kept up to date (.github/scripts/host_pins.py):
+#   * a game with no submodule, or pinned to a commit that is not an annotated vX.Y.Z tag here: the issue is opened at once;
+#   * a game behind the newest tag any game pins: its age counts from the first host release after its own tag, a date that newer
+#     releases don't move, and the issue is opened past MAX_DAYS;
+#   * while any drift remains the issue's body is rewritten (with how to fix each game); when all games are on one tag it is closed.
+# Playbook: "The games end up on different host versions" -> bump all three (scenario C).
+# Reads the games with THPS64_READ_TOKEN while the repositories are private (an org secret, RELEASING.md), else with GITHUB_TOKEN;
+# issue writes always use GITHUB_TOKEN (permissions below). Scheduled and manual runs only, so every run is trusted. Nothing is built.
+name: host-pins
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"      # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0       # every tag, with its date
+          persist-credentials: false
+      - name: Each game's pinned host release, and the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          READ_TOKEN: ${{ secrets.THPS64_READ_TOKEN || github.token }}
+          ORG: THPS64Recomp
+          GAMES: "THPS1-64Recomp THPS2-64Recomp THPS3-64Recomp"
+          MAX_DAYS: "30"
+        run: python3 -I .github/scripts/host_pins.py

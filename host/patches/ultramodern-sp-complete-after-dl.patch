@@ -1,0 +1,37 @@
+ultramodern: send "RSP done" to the game after the display list has been parsed, not before.
+
+N64ModernRuntime (cdf5abb) gfx_thread_func calls sp_complete() the moment a graphics task is dequeued and parses it in
+send_dl() afterwards. Hardware semantics allow a game to reuse its display-list / vertex / matrix buffers as soon as the RSP is
+done; the HLE renderer reads them during send_dl, so the game overwrote them while RT64 was still parsing: wild list pointers,
+SIGSEGV/SIGBUS in RT64::Interpreter::processDisplayLists and (garbage workloads) in the render thread (FramebufferRenderer::
+addFramebuffer, ProjectionProcessor::processScene). Seen in tests under load and in the user's own play (2026-10-14).
+Applied by tools/setup_runtime.py (NMR_PATCHES) to lib/N64ModernRuntime.
+
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 17d7a47..75c3ae3 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -364,11 +364,10 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+         if (events_context.action_queue.wait_dequeue_timed(action, 1ms)) {
+             // Determine the action type and act on it
+             if (const auto* task_action = std::get_if<SpTaskAction>(&action)) {
+-                // Tell the game that the RSP completed instantly. This will allow it to queue other task types, but it won't
+-                // start another graphics task until the RDP is also complete. Games usually preserve the RSP inputs until the RDP
+-                // is finished as well, so sending this early shouldn't be an issue in most cases.
+-                // If this causes issues then the logic can be replaced with responding to yield requests.
+-                sp_complete();
++                // [thps-recomp] The "RSP done" message goes out AFTER the display list has been parsed (see below), not before:
++                // a game may reuse the display list, vertex and matrix buffers as soon as the RSP is done (on hardware it has
++                // consumed them by then), and the HLE renderer reads them in send_dl. Telling the game early let it overwrite
++                // them while RT64 was still parsing (wild list pointers, crashes in the gfx and render threads).
+                 ultramodern::measure_input_latency();
+ 
+                 PTR(u64) displaylist = task_action->task.t.data_ptr;
+@@ -378,6 +377,7 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+                 renderer_context->send_dl(&task_action->task);
+                 [[maybe_unused]] auto renderer_end = std::chrono::high_resolution_clock::now();
+ 
++                sp_complete();
+                 dp_complete();
+                 // TODO hook the parsed event up to the actual parsing point when a callback is added to RT64.
+                 ultramodern::extensions::on_displaylist_parsed(displaylist);

@@ -1,0 +1,14 @@
+diff --git a/src/common/rt64_hlslpp.h b/src/common/rt64_hlslpp.h
+index 1450565..9f2058a 100644
+--- a/src/common/rt64_hlslpp.h
++++ b/src/common/rt64_hlslpp.h
+@@ -10,4 +10,8 @@
+ #define HLSLPP_SCALAR
+ #endif
+ 
++// The scalar implementation uses labs() without including <stdlib.h>, which recent
++// macOS SDKs no longer bring in through <math.h>. (Same fix as CBFD-Recompiled rt64.patch.)
++#include <stdlib.h>
++
+ #include "hlsl++.h"
+\ No newline at end of file

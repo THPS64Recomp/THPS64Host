@@ -1,0 +1,265 @@
+<rml>
+<head>
+    <link type="text/rcss" href="rml.rcss"/>
+    <link type="text/rcss" href="recomp.rcss"/>
+    <title>Settings</title>
+    <style>
+        body { width: 100%; height: 100%; }
+        .menu-title { padding: 18dp 28dp 0dp 28dp; font-size: 22dp; color: #8d8ca0; }
+    </style>
+</head>
+<body class="window">
+    <div id="window" class="rmlui-window" style="display:flex; flex-flow: column; background-color:rgba(0,0,0,0); pointer-events: auto">
+        <div class="centered-page">
+            <div class="centered-page__modal">
+                <div class="menu-title" data-model="app_model">{{game_title}} - Settings</div>
+                <tabset class="tabs" id="config_tabset">
+                <tab class="tab" autofocus id="tab_general">
+                    <div>General</div>
+                    <div class="tab__indicator"></div>
+                </tab>
+                <panel class="config" data-model="general_model">
+                    <form class="config__form">
+                        <div class="config__hz-wrapper">
+                            <div class="config__wrapper">
+                    <div class="config-option">
+                        <label class="config-option__title">Skip Intro</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="skip_intro" data-checked="skip_intro" value="On" id="si_On" />
+                            <label class="config-option__tab-label" id="lbl_si_On" for="si_On">On</label>
+                            <input type="radio" name="skip_intro" data-checked="skip_intro" value="Off" id="si_Off" />
+                            <label class="config-option__tab-label" id="lbl_si_Off" for="si_Off">Off</label>
+                            <div class="config-option__details">Start at the title screen: no logos or legal screens.</div>
+                        </div>
+                    </div>
+                    <div class="config-option">
+                        <label class="config-option__title">Show FPS in Window Title</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="show_fps" data-checked="show_fps" value="On" id="fps_On" />
+                            <label class="config-option__tab-label" id="lbl_fps_On" for="fps_On">On</label>
+                            <input type="radio" name="show_fps" data-checked="show_fps" value="Off" id="fps_Off" />
+                            <label class="config-option__tab-label" id="lbl_fps_Off" for="fps_Off">Off</label>
+                        </div>
+                    </div>
+                            </div>
+                        </div>
+                    </form>
+                </panel>
+                <tab class="tab" id="tab_controls">
+                    <div>Controls</div>
+                    <div class="tab__indicator"></div>
+                </tab>
+                <panel class="config" data-model="controls_model">
+                    <form class="config__form">
+                        <div class="config__hz-wrapper">
+                            <div class="config__wrapper">
+                    <div class="config-option">
+                        <label class="config-option__title">Controller Layout</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="preset" data-checked="preset" value="thps-xbox" id="cl_thps_xbox" />
+                            <label class="config-option__tab-label" id="lbl_cl_thps_xbox" for="cl_thps_xbox">Face buttons (default)</label>
+                            <input type="radio" name="preset" data-checked="preset" value="n64" id="cl_n64" />
+                            <label class="config-option__tab-label" id="lbl_cl_n64" for="cl_n64">N64 layout (C buttons on right stick)</label>
+                            <div class="config-option__details">Keyboard and controller. Picking a layout replaces every binding.</div>
+                        </div>
+                    </div>
+                    <div class="config-option" data-if="preset_is_custom">
+                        <p>Your controls.cfg has custom bindings, so neither layout is selected. Picking one replaces them (a .bak copy is kept).</p>
+                    </div>
+                    <div class="config-option">
+                        <p>Keyboard: arrows = stick, Space = A, D = B, I / J / K / L = C buttons, Q / E / S = L / R / Z, Enter = Start. To bind single buttons or keys, edit controls.cfg in {{config_dir}} and restart; in-game rebinding is planned.</p>
+                    </div>
+                            </div>
+                        </div>
+                    </form>
+                </panel>
+                <tab class="tab" id="tab_graphics">
+                    <div>Graphics</div>
+                    <div class="tab__indicator"></div>
+                </tab>
+                <panel class="config" data-model="graphics_model">
+                    <form class="config__form">
+                        <div class="config__hz-wrapper">
+                            <div class="config__wrapper">
+                    <div class="config-option">
+                        <label class="config-option__title">Aspect Ratio</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="aspect" data-checked="aspect" value="original" id="ar_original" />
+                            <label class="config-option__tab-label" id="lbl_ar_original" for="ar_original">Original (4:3)</label>
+                            <input type="radio" name="aspect" data-checked="aspect" value="expand" id="ar_expand" />
+                            <label class="config-option__tab-label" id="lbl_ar_expand" for="ar_expand">Fit window</label>
+                            <input type="radio" name="aspect" data-checked="aspect" value="16:9" id="ar_169" />
+                            <label class="config-option__tab-label" id="lbl_ar_169" for="ar_169">16:9</label>
+                            <input type="radio" name="aspect" data-checked="aspect" value="21:9" id="ar_219" />
+                            <label class="config-option__tab-label" id="lbl_ar_219" for="ar_219">21:9</label>
+                        </div>
+                    </div>
+                    <div class="config-option" data-if="show_hud">
+                        <label class="config-option__title">HUD Placement</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="hud" data-checked="hud" value="original" id="hud_original" />
+                            <label class="config-option__tab-label" id="lbl_hud_original" for="hud_original">Original (4:3)</label>
+                            <input type="radio" name="hud" data-checked="hud" value="16:9" id="hud_169" />
+                            <label class="config-option__tab-label" id="lbl_hud_169" for="hud_169">16:9 edges</label>
+                            <input type="radio" name="hud" data-checked="hud" value="expand" id="hud_expand" />
+                            <label class="config-option__tab-label" id="lbl_hud_expand" for="hud_expand">Screen edges</label>
+                            <div class="config-option__details">Where the score, special meter, timer and the like sit when the picture is wider than 4:3. Original keeps them in the 4:3 middle. Menus and pause screens stay centred.</div>
+                        </div>
+                    </div>
+                    <div class="config-option">
+                        <label class="config-option__title">Resolution</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="res_scale" data-checked="res_scale" value="0" id="rs_0" />
+                            <label class="config-option__tab-label" id="lbl_rs_0" for="rs_0">Auto</label>
+                            <input type="radio" name="res_scale" data-checked="res_scale" value="1" id="rs_1" />
+                            <label class="config-option__tab-label" id="lbl_rs_1" for="rs_1">1x</label>
+                            <input type="radio" name="res_scale" data-checked="res_scale" value="2" id="rs_2" />
+                            <label class="config-option__tab-label" id="lbl_rs_2" for="rs_2">2x</label>
+                            <input type="radio" name="res_scale" data-checked="res_scale" value="3" id="rs_3" />
+                            <label class="config-option__tab-label" id="lbl_rs_3" for="rs_3">3x</label>
+                            <input type="radio" name="res_scale" data-checked="res_scale" value="4" id="rs_4" />
+                            <label class="config-option__tab-label" id="lbl_rs_4" for="rs_4">4x</label>
+                            <div class="config-option__details">Multiple of the original 320x240 image. Auto follows the window.</div>
+                        </div>
+                    </div>
+                    <div class="config-option">
+                        <label class="config-option__title">Anti-Aliasing (MSAA)</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="msaa" data-checked="msaa" value="0" id="ms_0" />
+                            <label class="config-option__tab-label" id="lbl_ms_0" for="ms_0">None</label>
+                            <input type="radio" name="msaa" data-checked="msaa" value="2" id="ms_2" />
+                            <label class="config-option__tab-label" id="lbl_ms_2" for="ms_2">2x</label>
+                            <input type="radio" name="msaa" data-checked="msaa" value="4" id="ms_4" />
+                            <label class="config-option__tab-label" id="lbl_ms_4" for="ms_4">4x</label>
+                            <input type="radio" name="msaa" data-checked="msaa" value="8" id="ms_8" data-if="show_msaa8" />
+                            <label class="config-option__tab-label" id="lbl_ms_8" for="ms_8" data-if="show_msaa8">8x</label>
+                        </div>
+                    </div>
+                    <div class="config-option">
+                        <label class="config-option__title">Frame Rate</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="refresh" data-checked="refresh" value="original" id="rr_original" />
+                            <label class="config-option__tab-label" id="lbl_rr_original" for="rr_original">Original (30)</label>
+                            <input type="radio" name="refresh" data-checked="refresh" value="display" id="rr_display" />
+                            <label class="config-option__tab-label" id="lbl_rr_display" for="rr_display">Match display</label>
+                            <input type="radio" name="refresh" data-checked="refresh" value="60" id="rr_60" />
+                            <label class="config-option__tab-label" id="lbl_rr_60" for="rr_60">60</label>
+                            <input type="radio" name="refresh" data-checked="refresh" value="120" id="rr_120" />
+                            <label class="config-option__tab-label" id="lbl_rr_120" for="rr_120">120</label>
+                            <div class="config-option__details">Extra frames are interpolated between the game's own.</div>
+                        </div>
+                    </div>
+                    <div class="config-option">
+                        <label class="config-option__title">Window Mode</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="window_mode" data-checked="window_mode" value="windowed" id="wm_windowed" />
+                            <label class="config-option__tab-label" id="lbl_wm_windowed" for="wm_windowed">Windowed</label>
+                            <input type="radio" name="window_mode" data-checked="window_mode" value="fullscreen" id="wm_fullscreen" />
+                            <label class="config-option__tab-label" id="lbl_wm_fullscreen" for="wm_fullscreen">Fullscreen</label>
+                        </div>
+                    </div>
+                            </div>
+                        </div>
+                    </form>
+                </panel>
+                <tab class="tab" id="tab_sound">
+                    <div>Sound</div>
+                    <div class="tab__indicator"></div>
+                </tab>
+                <panel class="config" data-model="sound_model">
+                    <form class="config__form">
+                        <div class="config__hz-wrapper">
+                            <div class="config__wrapper">
+                    <div class="config-option">
+                        <label class="config-option__title">Main Volume</label>
+                        <div class="config-option__range-wrapper config-option__list">
+                            <label class="config-option__range-label">{{main_volume}}%</label>
+                            <input class="nav-vert" id="main_volume_input" type="range" min="0" max="100" style="flex: 1; margin: 0dp;" data-value="main_volume" />
+                        </div>
+                    </div>
+                            </div>
+                        </div>
+                    </form>
+                </panel>
+                <tab class="tab" id="tab_cheats">
+                    <div>Cheats</div>
+                    <div class="tab__indicator"></div>
+                </tab>
+                <panel class="config" data-model="cheats_model">
+                    <form class="config__form">
+                        <div class="config__hz-wrapper">
+                            <div class="config__wrapper">
+                    <div class="config-option">
+                        <p>Test aids for play testing, all off by default. They aren't stored in your Controller Pak save, but progress you make with one on is saved as usual. The log and crash.log name the ones that are on.</p>
+                    </div>
+                    <div class="config-option" data-if="has_unlock_levels">
+                        <label class="config-option__title">{{title_unlock_levels}}</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="unlock_levels" data-checked="unlock_levels" value="On" id="ch_ul_On" />
+                            <label class="config-option__tab-label" id="lbl_ch_ul_On" for="ch_ul_On">On</label>
+                            <input type="radio" name="unlock_levels" data-checked="unlock_levels" value="Off" id="ch_ul_Off" />
+                            <label class="config-option__tab-label" id="lbl_ch_ul_Off" for="ch_ul_Off">Off</label>
+                            <div class="config-option__details">{{note_unlock_levels}}</div>
+                        </div>
+                    </div>
+                    <div class="config-option" data-if="has_perfect_balance">
+                        <label class="config-option__title">{{title_perfect_balance}}</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="perfect_balance" data-checked="perfect_balance" value="On" id="ch_pb_On" />
+                            <label class="config-option__tab-label" id="lbl_ch_pb_On" for="ch_pb_On">On</label>
+                            <input type="radio" name="perfect_balance" data-checked="perfect_balance" value="Off" id="ch_pb_Off" />
+                            <label class="config-option__tab-label" id="lbl_ch_pb_Off" for="ch_pb_Off">Off</label>
+                            <div class="config-option__details">{{note_perfect_balance}}</div>
+                        </div>
+                    </div>
+                    <div class="config-option" data-if="has_slow_motion">
+                        <label class="config-option__title">{{title_slow_motion}}</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="slow_motion" data-checked="slow_motion" value="On" id="ch_sm_On" />
+                            <label class="config-option__tab-label" id="lbl_ch_sm_On" for="ch_sm_On">On</label>
+                            <input type="radio" name="slow_motion" data-checked="slow_motion" value="Off" id="ch_sm_Off" />
+                            <label class="config-option__tab-label" id="lbl_ch_sm_Off" for="ch_sm_Off">Off</label>
+                            <div class="config-option__details">{{note_slow_motion}}</div>
+                        </div>
+                    </div>
+                    <div class="config-option" data-if="has_skip_to_restart">
+                        <label class="config-option__title">{{title_skip_to_restart}}</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="skip_to_restart" data-checked="skip_to_restart" value="On" id="ch_sr_On" />
+                            <label class="config-option__tab-label" id="lbl_ch_sr_On" for="ch_sr_On">On</label>
+                            <input type="radio" name="skip_to_restart" data-checked="skip_to_restart" value="Off" id="ch_sr_Off" />
+                            <label class="config-option__tab-label" id="lbl_ch_sr_Off" for="ch_sr_Off">Off</label>
+                            <div class="config-option__details">{{note_skip_to_restart}}</div>
+                        </div>
+                    </div>
+                    <div class="config-option" data-if="has_always_special">
+                        <label class="config-option__title">{{title_always_special}}</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="always_special" data-checked="always_special" value="On" id="ch_as_On" />
+                            <label class="config-option__tab-label" id="lbl_ch_as_On" for="ch_as_On">On</label>
+                            <input type="radio" name="always_special" data-checked="always_special" value="Off" id="ch_as_Off" />
+                            <label class="config-option__tab-label" id="lbl_ch_as_Off" for="ch_as_Off">Off</label>
+                            <div class="config-option__details">{{note_always_special}}</div>
+                        </div>
+                    </div>
+                            </div>
+                        </div>
+                    </form>
+                </panel>
+                </tabset>
+                <div class="config__icon-buttons">
+                    <button class="icon-button" onclick="close_menu" id="config__close-menu-button">
+                        <svg src="icons/X.svg" />
+                    </button>
+                </div>
+            </div>
+            <div class="centered-page__controls">
+                <label><span>Close</span> <span class="prompt-font-sm">Esc</span></label>
+                <label><span>Move</span> <span class="prompt-font-sm">Arrows / D-pad</span></label>
+                <label><span>Choose</span> <span class="prompt-font-sm">Enter / A</span></label>
+                <label><span>Tabs</span> <span class="prompt-font-sm">LB / RB</span></label>
+            </div>
+        </div>
+    </div>
+</body>
+</rml>

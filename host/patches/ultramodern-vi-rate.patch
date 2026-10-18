@@ -1,0 +1,47 @@
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index 46aea61..7f423aa 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -102,6 +102,9 @@ bool is_game_thread();
+ void submit_rsp_task(RDRAM_ARG PTR(OSTask) task);
+ void send_si_message();
+ uint32_t get_speed_multiplier();
++// Retrace rate of the emulated console in Hz (60 NTSC, 50 PAL). Set before the game starts.
++uint32_t get_vi_rate();
++void set_vi_rate(uint32_t hz);
+ 
+ // Time
+ std::chrono::high_resolution_clock::time_point get_start();
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 17d7a47..74b0fd4 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -178,6 +178,10 @@ extern "C" void osViSetEvent(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, u32 ret
+ 
+ uint64_t total_vis = 0;
+ 
++static std::atomic_uint32_t vi_rate = 60;
++uint32_t ultramodern::get_vi_rate() { return vi_rate.load(); }
++void ultramodern::set_vi_rate(uint32_t hz) { vi_rate = hz ? hz : 60; }
++
+ 
+ extern std::atomic_bool exited;
+ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
+@@ -195,7 +199,7 @@ void vi_thread_func() {
+ 
+     while (!exited) {
+         // Determine the next VI time (more accurate than adding 16ms each VI interrupt)
+-        auto next = ultramodern::get_start() + (total_vis * 1000000us) / (60 * ultramodern::get_speed_multiplier());
++        auto next = ultramodern::get_start() + (total_vis * 1000000us) / (ultramodern::get_vi_rate() * ultramodern::get_speed_multiplier());
+         //if (next > std::chrono::high_resolution_clock::now()) {
+         //    printf("Sleeping for %" PRIu64 " us to get from %" PRIu64 " us to %" PRIu64 " us \n",
+         //        (next - std::chrono::high_resolution_clock::now()) / 1us,
+@@ -212,7 +216,7 @@ void vi_thread_func() {
+         ultramodern::sleep_until(next);
+         auto time_now = ultramodern::time_since_start();
+         // Calculate how many VIs have passed
+-        uint64_t new_total_vis = (time_now * (60 * ultramodern::get_speed_multiplier()) / 1000ms) + 1;
++        uint64_t new_total_vis = (time_now * (ultramodern::get_vi_rate() * ultramodern::get_speed_multiplier()) / 1000ms) + 1;
+         if (new_total_vis > total_vis + 1) {
+             //printf("Skipped % " PRId64 " frames in VI interupt thread!\n", new_total_vis - total_vis - 1);
+         }

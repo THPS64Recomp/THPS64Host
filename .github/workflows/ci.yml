@@ -1,0 +1,158 @@
+# CI for THPS64Host, the shared host of the THPS recomps. Every pull request (and every push to main) builds all three game
+# repositories against THIS host: each game's checkout gets the PR's host at decomp/common in place of its pinned submodule. That
+# catches "fixed THPS1, broke THPS3" at build level before anything is tagged (playbook scenario C).
+# Which game branch: `main`, unless the game repository has a branch with the SAME NAME as this run's branch (a pull request's head
+# branch, else the pushed or dispatched branch): then that one. A breaking host change (playbook scenario H) pushes a branch of that
+# name to each game that needs the matching change; the host PR goes green against them; merge the host, tag it, then the games' PRs
+# (which move decomp/common to the new tag). The step summary and an annotation say which game ref each job built.
+# ROM-free, like the games' own CI: the games build with stub functions (-DTHPS_STUB_FUNCS=ON) and run the ROM-free checks
+# (--features, --check-rom on an empty file, the controls.cfg test). No ROM, nothing ROM-derived is fetched.
+# Private repositories (the launch rehearsal only): the org secret THPS64_READ_TOKEN (read-only on the four repositories' contents) checks
+# out the private games. Only trusted runs use it (pushes, manual runs, pull requests from branches of this repository); a fork's pull
+# request gets the default token, and GitHub gives fork runs no secrets anyway. Public repositories need no token.
+# The games' own CI and release logic is here too, as reusable workflows (game-ci.yml, game-release.yml, called by the games at a tag).
+#   patches   the pinned RT64 + our patches apply (git apply on a clean checkout of the pin)
+#   build     {thps1, thps2, thps3} x {linux clang, windows clang-cl, macos arm64}: version tables, stub build, ROM-free checks
+# What this cannot prove: rendering (hosted runners have no GPU), audio, input, gameplay. The maintainer runs the game suites
+# locally before tagging (playbook, test tiers).
+name: ci
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  patches:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch the pinned RT64 (patched files only) and apply our patches in order
+        run: python -I host/tools/setup_runtime.py "$RUNNER_TEMP/rt" --patches-only
+
+  build:
+    needs: patches
+    name: ${{ matrix.game }} ${{ matrix.os }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        game: [thps1, thps2, thps3]
+        os: [linux, windows, macos]
+        include:
+          - game: thps1
+            repo: THPS1-64Recomp
+          - game: thps2
+            repo: THPS2-64Recomp
+          - game: thps3
+            repo: THPS3-64Recomp
+          - os: linux
+            runner: ubuntu-latest
+            cc: clang
+            cxx: clang++
+          - os: windows
+            runner: windows-latest
+            cc: clang-cl
+            cxx: clang-cl
+          - os: macos
+            runner: macos-14
+            cc: clang
+            cxx: clang++
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Which game branch (a branch named like this run's, else main)
+        id: gameref
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          REPO_URL: https://github.com/THPS64Recomp/${{ matrix.repo }}.git
+          READ_TOKEN: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.THPS64_READ_TOKEN || github.token }}
+        run: |
+          auth=$(printf 'x-access-token:%s' "$READ_TOKEN" | base64 | tr -d '\n')
+          ref=main
+          if [ -n "$BRANCH" ] && [ "$BRANCH" != main ]; then
+            if out=$(git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" ls-remote --heads "$REPO_URL" "refs/heads/$BRANCH"); then
+              if [ -n "$out" ]; then ref=$BRANCH; fi
+            else
+              echo "::error title=Game branches unreadable::Could not list the branches of $REPO_URL. While the repositories are private this needs the THPS64_READ_TOKEN secret (RELEASING.md); otherwise retry the run."
+              exit 1
+            fi
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [ "$ref" != main ]; then why="same name as this run's branch"
+          elif [ -z "$BRANCH" ] || [ "$BRANCH" = main ]; then why="this run is on main"
+          else why="no branch named '$BRANCH' there"; fi
+          echo "::notice title=${{ matrix.repo }} ref::building ${{ matrix.repo }} at '$ref' ($why)"
+          echo "- ${{ matrix.repo }} (${{ matrix.os }}): game branch \`$ref\` ($why)" >> "$GITHUB_STEP_SUMMARY"
+      - name: The game's branch (without its pinned host)
+        uses: actions/checkout@v4
+        with:
+          repository: THPS64Recomp/${{ matrix.repo }}
+          ref: ${{ steps.gameref.outputs.ref }}
+          path: game
+          submodules: false
+          persist-credentials: false
+          token: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.THPS64_READ_TOKEN || github.token }}
+      - name: This host at game/decomp/common (the pull request's code in place of the pin)
+        uses: actions/checkout@v4
+        with:
+          path: game/decomp/common
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencies (linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang libsdl2-dev libvulkan-dev libx11-dev libgtk-3-dev
+      - name: Dependencies (windows)
+        if: matrix.os == 'windows'
+        run: choco install ninja -y --no-progress
+      - name: MSVC environment
+        if: matrix.os == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Dependencies (macos)
+        if: matrix.os == 'macos'
+        run: brew install ninja sdl2
+      - name: Version tables (games.toml, classes.toml, host_syms.toml, per-class data, game.toml)
+        run: |
+          H=game/decomp/${{ matrix.game }}/recomp-host
+          python -I "$H/tools/gen_versions.py" check
+          python -I "$H/tools/gen_versions.py" header "$RUNNER_TEMP/a.h"
+          python -I "$H/tools/gen_versions.py" header "$RUNNER_TEMP/b.h"
+          cmp "$RUNNER_TEMP/a.h" "$RUNNER_TEMP/b.h"
+      - name: Pinned runtime + our RT64 patches
+        run: python -I game/decomp/common/host/tools/setup_runtime.py "$RUNNER_TEMP/rt"
+      - name: Build the game with stub functions, then the ROM-free checks
+        run: |
+          g=${{ matrix.game }}
+          H=game/decomp/$g/recomp-host
+          cmake -S "$H" -B "$RUNNER_TEMP/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DRECOMP_RUNTIME_DIR="$RUNNER_TEMP/rt" \
+            -DTHPS_STUB_FUNCS=ON -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          grep -q "^THPS_HOST_ROOT:PATH=.*game/decomp/common$" "$RUNNER_TEMP/build/CMakeCache.txt" || { echo "::error::the build did not use the PR's host at game/decomp/common"; grep THPS_HOST_ROOT "$RUNNER_TEMP/build/CMakeCache.txt"; exit 1; }
+          cmake --build "$RUNNER_TEMP/build" --target ${g}_recomp
+          EXE="$RUNNER_TEMP/build/${g}_recomp"
+          if [ -f "$EXE.exe" ]; then EXE="$EXE.exe"; fi
+          "$EXE" --features
+          : > "$RUNNER_TEMP/empty.rom"
+          set +e; "$EXE" --config "$RUNNER_TEMP/cfg" --check-rom "$RUNNER_TEMP/empty.rom"; rc=$?; set -e
+          echo "$g: check-rom of an empty file exited $rc (3 expected)"
+          [ "$rc" = 3 ]
+          python -I "$H/tests/controls_cfg_test.py" "$EXE"

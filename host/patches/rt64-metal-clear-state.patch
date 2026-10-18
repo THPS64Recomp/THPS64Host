@@ -1,0 +1,40 @@
+RT64 4337374 + plume d890ac8: Metal partial clears must not restore the command-list state cache (found on the THPS1 name-entry screen).
+
+plume's MetalCommandList::clearColor / clearDepthStencil with clear rects draw a quad: that changes what the encoder really has
+bound (pipeline, viewport, scissor, depth/stencil state, cull mode, buffer + bytes slot 0). Afterwards it did `stateCache =
+previousCache`, i.e. it told plume the OLD values were still bound. The next draw that used the same pipeline as before the
+clear then skipped setRenderPipelineState and ran with the clear pipeline: its geometry vanished. In THPS1 every slot of the
+name-entry row is "fill rect (underscore), then glyph texrects", so only the first letter showed. Fix: reset the cache (as
+endActiveRenderEncoder does) so the next draw binds everything again. Metal only; D3D12 and Vulkan clear natively.
+
+diff --git a/src/contrib/plume/plume_metal.cpp b/src/contrib/plume/plume_metal.cpp
+--- a/src/contrib/plume/plume_metal.cpp
++++ b/src/contrib/plume/plume_metal.cpp
+@@ -2858,8 +2858,13 @@
+ 
+         activeRenderEncoder->popDebugGroup();
+ 
+-        // Restore previous state if we had one
+-        stateCache = previousCache;
++        // [thps-recomp] The quad clear changed what the encoder really has bound (pipeline, viewport, scissor, depth/stencil,
++        // cull mode, buffer and bytes slots 0). Restoring the pre-clear cache claimed the old values were still bound, so the next
++        // draw that used the same pipeline as before the clear never re-set it and ran with the clear pipeline: its geometry
++        // vanished (THPS1: letters on the name-entry screen after a fill rect). Forget the cache; setAll() makes the next draw bind
++        // everything again.
++        (void)previousCache;
++        stateCache.reset();
+         dirtyGraphicsState.setAll();
+     }
+ 
+@@ -2957,8 +2962,9 @@
+ 
+             activeRenderEncoder->popDebugGroup();
+ 
+-            // Restore previous state if we had one
+-            stateCache = previousCache;
++            // [thps-recomp] Same as clearColor: the cache must be forgotten, not restored (see there).
++            (void)previousCache;
++            stateCache.reset();
+             dirtyGraphicsState.setAll();
+         }
+     }

@@ -1,0 +1,25 @@
+# Patch for lab313ru/rnc_propack_source @ 499e8128f9a3 (main.c).
+# Raises the packer's look-ahead buffer from 0xFFFF to 0x20000 bytes so long
+# zero runs are measured the way Edge of Reality's ProPack measured them.
+# With it, 1,094/1,094 THPS1 ERZ method-1 chunks recompress byte-identically
+# (unpatched: 1,092 - main chunks 11 and 12 differ). See the private development notes.
+--- a/main.c	2026-10-10 00:31:12
++++ b/main.c	2026-10-10 00:31:12
+@@ -579,7 +579,7 @@
+ 
+     while (v->bytes_left || v->pack_block_pos)
+     {
+-        uint16 size_to_read = 0xFFFF - v->dict_size - v->pack_block_pos;
++        uint32 size_to_read = 0x20000 - v->dict_size - v->pack_block_pos;
+ 
+         if (v->bytes_left < size_to_read)
+             size_to_read = v->bytes_left;
+@@ -1058,7 +1058,7 @@
+     v->leeway = 0;
+     v->chunks_count = 0;
+ 
+-    v->mem1 = (uint8 *)malloc(0xFFFF);
++    v->mem1 = (uint8 *)malloc(0x20000 + 16);
+     v->mem2 = (uint16 *)malloc(0x10000);
+     v->mem3 = (uint16 *)malloc(0x10000);
+     v->mem4 = (uint16 *)malloc(0x10000);

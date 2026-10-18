@@ -1,0 +1,393 @@
+# The release build of a game, kept once, here in THPS64Host (a reusable workflow). A game's .github/workflows/release.yml is a manual
+# (workflow_dispatch) caller pinned to the same host tag as its decomp/common submodule:
+#     uses: THPS64Recomp/THPS64Host/.github/workflows/game-release.yml@vX.Y.Z    with: game, host-tag, version, arch, replace-assets
+# It is the "split build" of ADR 0005 (ship the engine and the translator, never the game): one macOS package per game, carrying every
+# release of that game. The result is a workflow artifact plus a DRAFT release; nothing is published here.
+#
+#   preflight  inputs; decomp/common is an official host release (check_host_pin.sh); the CHANGELOG has a dated [VERSION] section
+#              (release_notes.py); the tag and any draft match the commit being built (release_guard.sh). Fails in a minute, not after
+#              an hour of builds.
+#   engine     (macos-14 arm64, macos-15-intel x86_64, natively) own SDL2 (tools/build_sdl2.py, pinned, SHA-256 checked) -> pinned runtime
+#              + our RT64 patches -> N64Recomp + RSPRecomp at the pin -> the engine with -DTHPS_SPLIT_GAME_LIB=ON (no ROM, no generated C,
+#              no game code at all) -> smoke test
+#   package    lipo the two slices -> tools/package_split.py (the .app, ad-hoc signed, hardened runtime + entitlements) -> zip with ditto
+#              -> unzip it again and run the ROM-free gate (tools/scan_bundle.py --no-rom) + signature + smoke test on the unzipped copy
+#              -> the zip + SHA256SUMS as the artifact -> the same checks as preflight again -> the zip and SHA256SUMS-macOS.txt to a DRAFT
+#              release v<version> (a prerelease when the version has a "-"); notes from the CHANGELOG section on first creation.
+#
+# Binding (RELEASING.md, release manifest): the workflow never creates, moves or deletes a tag. An existing tag v<version> must name the
+# commit this run builds; an existing draft must target it; a run from another commit fails instead of overwriting assets, and assets of
+# an earlier run of the same commit are replaced only with replace-assets (then the manifest changes and needs approval again). The run
+# summary lists the zip's SHA-256 and the run ID for tools/release_manifest.py.
+#
+# What the gate proves and does not: it proves the bundle holds no generated game code (allowlist of files, no func_8xxxxxxx /
+# class-prefixed / game-function symbols in any Mach-O, engine size budget, recipe files contain names/addresses/sizes/hashes only). It
+# does NOT compare bytes with a ROM, because CI has none (and must never get one). The full ROM-window scan runs LOCALLY on the exact zip
+# before anything is made public, once per dump of the game.
+#
+# Private repositories (the launch rehearsal only): the THPS64_READ_TOKEN secret, passed by the caller, reads the private host. Releases
+# are dispatched by maintainers only, so every run is trusted.
+name: game-release
+
+on:
+  workflow_call:
+    inputs:
+      game:
+        description: "The game's family: thps1, thps2 or thps3"
+        required: true
+        type: string
+      host-tag:
+        description: "The THPS64Host tag this workflow is called at (the @vX.Y.Z of the uses: line); decomp/common must be at it"
+        required: true
+        type: string
+      version:
+        description: "Release version (0.1.0, 0.1.0-preview): file names, Info.plist, the tag v<version> and the CHANGELOG section"
+        required: true
+        type: string
+      arch:
+        description: "universal (arm64 + x86_64, two native builds + lipo) or arm64"
+        required: false
+        type: string
+        default: universal
+      replace-assets:
+        description: "Replace this commit's earlier macOS assets in the draft (the release manifest then needs approval again)"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      THPS64_READ_TOKEN:
+        description: "Optional, private phase only: fine-grained token with read access to the four repositories' contents"
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  GAME: ${{ inputs.game }}
+  HOST: decomp/${{ inputs.game }}/recomp-host
+  EXE: ${{ inputs.game }}_recomp
+  SHARED: decomp/common/host
+  HOST_TAG: ${{ inputs.host-tag }}
+  VERSION: ${{ inputs.version }}
+  # RT64's Metal backend needs argument buffers tier 2, i.e. macOS 13+; keep equal to MIN_MACOS in tools/package_split.py.
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write          # only to SEE draft releases (the API lists drafts to writers only); this job changes nothing
+    steps:
+      - name: The inputs
+        env:
+          ARCH: ${{ inputs.arch }}
+        run: |
+          echo "$GAME" | grep -Eqx 'thps[123]' || { echo "::error title=Bad game input::game is '$GAME'; .github/workflows/release.yml must pass game: thps1, thps2 or thps3."; exit 1; }
+          echo "$HOST_TAG" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+' || { echo "::error title=Bad host-tag input::host-tag is '$HOST_TAG'; it must be the vX.Y.Z of the 'uses: ...game-release.yml@vX.Y.Z' line."; exit 1; }
+          echo "$VERSION" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?' || { echo "::error title=Bad version::'$VERSION' is not a release version. Use X.Y.Z or X.Y.Z-preview (no leading v), matching a '## [X.Y.Z] - date' section of CHANGELOG.md."; exit 1; }
+          case "$ARCH" in universal|arm64) ;; *) echo "::error title=Bad arch::arch is '$ARCH'; use universal or arm64."; exit 1 ;; esac
+          echo "Building $GAME v$VERSION ($ARCH) from $GITHUB_SHA ($GITHUB_REF), host $HOST_TAG" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: THPS64Host at the tag this workflow is pinned to (its scripts check this repository)
+        uses: actions/checkout@v4
+        with:
+          repository: THPS64Recomp/THPS64Host
+          ref: ${{ inputs.host-tag }}
+          path: _thps64host
+          persist-credentials: false
+          token: ${{ secrets.THPS64_READ_TOKEN || github.token }}
+      - name: decomp/common is an official THPS64Host release
+        env:
+          THPS64_HOST_TOKEN: ${{ secrets.THPS64_READ_TOKEN || github.token }}
+        run: sh _thps64host/.github/scripts/check_host_pin.sh --expect-tag "$HOST_TAG"
+      - name: CHANGELOG.md has a dated section for this version (the release notes)
+        run: python3 -I _thps64host/.github/scripts/release_notes.py CHANGELOG.md "$VERSION" --host-tag "$HOST_TAG" --out "$RUNNER_TEMP/notes.md"
+      - name: The tag and any draft match this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPLACE: ${{ inputs.replace-assets }}
+        run: sh _thps64host/.github/scripts/release_guard.sh --repo "$GITHUB_REPOSITORY" --tag "v$VERSION" --sha "$GITHUB_SHA" --assets "*-macOS-*.zip SHA256SUMS-macOS.txt" --replace-assets "$REPLACE"
+
+  engine:
+    needs: preflight
+    name: engine (${{ inputs.game }}, ${{ matrix.arch }})
+    # Native builds: the Intel image is the last one GitHub offers (macos-13 was retired in December 2025).
+    runs-on: ${{ matrix.arch == 'arm64' && 'macos-14' || 'macos-15-intel' }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(inputs.arch == 'arm64' && '["arm64"]' || '["arm64","x86_64"]') }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+          token: ${{ secrets.THPS64_READ_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tools (build only; none of them ends up in the bundle)
+        run: brew install ninja ccache
+
+      # --- our own SDL2 (no Homebrew, no sdl2-compat/SDL3 in the bundle)
+      - name: SDL2 cache
+        id: sdl2cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sdl2
+          key: sdl2-${{ matrix.arch }}-${{ hashFiles('decomp/common/host/tools/build_sdl2.py') }}
+      - name: Build SDL2 (pinned source release, SHA-256 checked)
+        if: steps.sdl2cache.outputs.cache-hit != 'true'
+        run: python3 -I "$HOST/tools/build_sdl2.py" "$RUNNER_TEMP/sdl2" --work "$RUNNER_TEMP/sdl2-work" --arch ${{ matrix.arch }} --min-macos "$MACOSX_DEPLOYMENT_TARGET"
+      - name: SDL2 prefix
+        run: ls -la "$RUNNER_TEMP/sdl2" "$RUNNER_TEMP/sdl2/lib" && test -f "$RUNNER_TEMP/sdl2/LICENSE.txt"
+
+      # --- pinned runtime + RT64 with our patches
+      - name: Pinned runtime + our RT64 patches
+        run: python3 -I "$HOST/tools/setup_runtime.py" "$RUNNER_TEMP/rt"
+
+      # --- N64Recomp + RSPRecomp at the pinned commit (the pin lives in tools/build_host.py)
+      - name: N64Recomp pin
+        id: pin
+        run: |
+          PIN=$(sed -n 's/^N64RECOMP_PIN = "\([0-9a-f]\{40\}\)".*/\1/p' "$SHARED/tools/build_host.py")
+          test -n "$PIN"
+          echo "sha=$PIN" >> "$GITHUB_OUTPUT"
+      - name: N64Recomp cache
+        id: n64cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/N64Recomp
+          key: n64recomp-${{ matrix.arch }}-${{ steps.pin.outputs.sha }}
+      - name: Build N64Recomp + RSPRecomp
+        if: steps.n64cache.outputs.cache-hit != 'true'
+        run: |
+          D="$RUNNER_TEMP/N64Recomp"
+          mkdir -p "$D" && cd "$D"
+          git init -q
+          git remote add origin https://github.com/N64Recomp/N64Recomp.git
+          git fetch -q --depth 1 origin "${{ steps.pin.outputs.sha }}"
+          git checkout -q FETCH_HEAD
+          git submodule update --init --recursive --depth 1 --jobs 4
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
+          cmake --build build --target N64RecompCLI RSPRecomp
+      - name: N64Recomp built for this architecture
+        run: |
+          for t in N64Recomp RSPRecomp; do echo "$t: $(lipo -archs "$RUNNER_TEMP/N64Recomp/build/$t")"; done
+          ls -la "$RUNNER_TEMP/N64Recomp/build/N64Recomp" "$RUNNER_TEMP/N64Recomp/build/RSPRecomp"
+
+      # --- the engine: no ROM, no generated code
+      - name: zlib for RT64's x86_64 shader compiler (build tool only; run 38185536174)
+        # RT64's Intel-mac dxc-macos is linked to @rpath/zlib.net/v1/lib/libz.dylib, which dyld finds by leaf name in DYLD_LIBRARY_PATH; the SDK
+        # only has libz.tbd. RT64 takes that directory from find_library(ZLIB_LIBRARY): give it a real libz.dylib (Homebrew's keg, not shipped).
+        if: matrix.arch == 'x86_64'
+        run: |
+          brew install zlib
+          ls -la "$(brew --prefix zlib)/lib/libz.dylib"
+          echo "ZLIB_ARG=-DZLIB_LIBRARY=$(brew --prefix zlib)/lib/libz.dylib" >> "$GITHUB_ENV"
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-engine-${{ matrix.arch }}-${{ github.run_id }}
+          restore-keys: ccache-engine-${{ matrix.arch }}-
+      - name: Configure the split engine
+        run: |
+          cmake -S "$HOST" -B "$RUNNER_TEMP/build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+            -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl2" -DTHPS_OWN_SDL2=ON \
+            -DRECOMP_RUNTIME_DIR="$RUNNER_TEMP/rt" -DTHPS_SPLIT_GAME_LIB=ON $ZLIB_ARG
+      - name: Build the engine
+        run: cmake --build "$RUNNER_TEMP/build" --target "$EXE"
+      - name: Smoke (no ROM, no window)
+        run: |
+          BIN="$RUNNER_TEMP/build/$EXE"
+          lipo -archs "$BIN"
+          otool -L "$BIN"
+          "$BIN" --features
+          # (--check-rom needs the recipe in Resources/classes to know a version: the package job tests that)
+
+      # --- stage what the package job needs, with the build-machine rpath replaced by the bundle's
+      - name: Stage
+        run: |
+          S="$RUNNER_TEMP/stage"
+          mkdir -p "$S/licenses"
+          cp "$RUNNER_TEMP/build/$EXE" "$S/"
+          cp "$RUNNER_TEMP/N64Recomp/build/N64Recomp" "$RUNNER_TEMP/N64Recomp/build/RSPRecomp" "$S/"
+          cp -L "$RUNNER_TEMP/sdl2/lib/libSDL2-2.0.0.dylib" "$S/"
+          cp "$RUNNER_TEMP/sdl2/LICENSE.txt" "$S/licenses/SDL2.txt"
+          cp "$RUNNER_TEMP/N64Recomp/LICENSE" "$S/licenses/N64Recomp.txt"
+          for rp in $(otool -l "$S/$EXE" | sed -n 's/^ *path \(.*\) (offset.*/\1/p'); do
+            case "$rp" in @*) ;; *) install_name_tool -delete_rpath "$rp" "$S/$EXE";; esac
+          done
+          install_name_tool -add_rpath @executable_path/../Frameworks "$S/$EXE"
+          otool -l "$S/$EXE" | grep -A2 LC_RPATH
+          ls -la "$S"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stage-${{ inputs.game }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/stage
+          retention-days: 3
+
+  package:
+    needs: engine
+    runs-on: macos-14
+    timeout-minutes: 60
+    permissions:
+      contents: write          # the draft release (gh release create/upload); nothing else
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+          token: ${{ secrets.THPS64_READ_TOKEN || github.token }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: stage-${{ inputs.game }}-*
+          path: ${{ runner.temp }}/in
+
+      - name: Runtime headers and licences (only the SDK headers go into the bundle, so no patches)
+        run: python3 -I "$HOST/tools/setup_runtime.py" "$RUNNER_TEMP/rt" --no-patch
+
+      - name: One binary per file (lipo when both slices are there)
+        run: |
+          IN="$RUNNER_TEMP/in"; U="$RUNNER_TEMP/uni"; mkdir -p "$U/licenses"
+          ls -R "$IN" | head -30
+          for f in "$EXE" N64Recomp RSPRecomp libSDL2-2.0.0.dylib; do
+            if [ -d "$IN/stage-$GAME-x86_64" ]; then
+              lipo -create "$IN/stage-$GAME-arm64/$f" "$IN/stage-$GAME-x86_64/$f" -output "$U/$f"
+            else
+              cp "$IN/stage-$GAME-arm64/$f" "$U/$f"
+            fi
+            echo "$f: $(lipo -archs "$U/$f")"
+          done
+          cp "$IN"/stage-$GAME-arm64/licenses/* "$U/licenses/"
+
+      - name: Assemble, sign and zip
+        run: |
+          U="$RUNNER_TEMP/uni"
+          python3 -I "$HOST/tools/package_split.py" --engine "$U/$EXE" --tools "$U" --runtime "$RUNNER_TEMP/rt" \
+            --version "$VERSION" --lib "libSDL2-2.0.0.dylib=$U/libSDL2-2.0.0.dylib" \
+            --license "SDL2=$U/licenses/SDL2.txt" --license "N64Recomp=$U/licenses/N64Recomp.txt" \
+            --license "N64ModernRuntime=$RUNNER_TEMP/rt/lib/N64ModernRuntime/COPYING" --license "RT64=$RUNNER_TEMP/rt/lib/rt64/LICENSE" \
+            --out "$RUNNER_TEMP/pkg/bundle" --zip
+          ls -la "$RUNNER_TEMP/pkg"
+
+      # --- everything below runs on the UNZIPPED copy of the zip that will be uploaded
+      - name: Unzip the result
+        run: |
+          ZIP=$(ls "$RUNNER_TEMP"/pkg/*-v"$VERSION"-macOS-*.zip)
+          echo "ZIP=$ZIP" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/check"
+          ditto -x -k "$ZIP" "$RUNNER_TEMP/check"
+          if unzip -l "$ZIP" | grep -q '__MACOSX'; then echo "::error title=Zip has __MACOSX::The zip holds __MACOSX metadata. Check how tools/package_split.py --zip calls ditto (resource forks and extended attributes must be left out)."; exit 1; fi
+          ls -la "$RUNNER_TEMP/check"
+      - name: ROM-free gate (no generated game code in the bundle)
+        run: python3 -I "$HOST/tools/scan_bundle.py" --no-rom "$RUNNER_TEMP/check"
+      - name: Signature and dependencies
+        run: |
+          APP=$(ls -d "$RUNNER_TEMP"/check/*.app)
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvv "$APP" 2>&1 | grep -E 'Identifier|Signature|flags|Format'
+          codesign -d --entitlements - "$APP" 2>&1 | grep -A1 'disable-library-validation'
+          for f in "$APP"/Contents/MacOS/* "$APP"/Contents/Frameworks/*; do
+            echo "== $f"; lipo -archs "$f"; otool -L "$f" | grep -E '^[[:space:]]' | grep -v -E '^[[:space:]]+(/System/|/usr/lib/|@rpath/libSDL2-2.0.0.dylib)' && { echo "unexpected dependency"; exit 1; } || true
+          done
+          plutil -lint "$APP/Contents/Info.plist"
+      - name: Smoke test the unzipped app (no ROM, no window)
+        run: |
+          APP=$(ls -d "$RUNNER_TEMP"/check/*.app)
+          BIN="$APP/Contents/MacOS/$EXE"
+          "$BIN" --features
+          : > "$RUNNER_TEMP/empty.rom"
+          set +e
+          "$BIN" --config "$RUNNER_TEMP/cfg" --check-rom "$RUNNER_TEMP/empty.rom"
+          rc=$?
+          set -e
+          echo "check-rom of an empty file exited $rc (3 expected)"
+          [ "$rc" = 3 ]
+          # the x86_64 slice under Rosetta, where the runner has it (informational)
+          if lipo -archs "$BIN" | grep -q x86_64; then
+            arch -x86_64 "$BIN" --features > /dev/null 2>&1 && echo "x86_64 slice runs (Rosetta)" || echo "x86_64 slice not run here (no Rosetta on this runner?)"
+          fi
+
+      - name: Name the artifact
+        run: |
+          echo "ZIPNAME=$(basename "$ZIP" .zip)" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/pkg/SHA256SUMS"
+          ls -la "$ZIP"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ZIPNAME }}
+          path: |
+            ${{ env.ZIP }}
+            ${{ runner.temp }}/pkg/SHA256SUMS
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+
+
+      # --- the draft release, bound to this commit
+      - name: THPS64Host at the tag this workflow is pinned to (release scripts)
+        uses: actions/checkout@v4
+        with:
+          repository: THPS64Recomp/THPS64Host
+          ref: ${{ inputs.host-tag }}
+          path: _thps64host
+          persist-credentials: false
+          token: ${{ secrets.THPS64_READ_TOKEN || github.token }}
+      - name: Release notes from the CHANGELOG section
+        run: python3 -I _thps64host/.github/scripts/release_notes.py CHANGELOG.md "$VERSION" --host-tag "$HOST_TAG" --out "$RUNNER_TEMP/notes.md"
+      - name: The tag and any draft still match this commit
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPLACE: ${{ inputs.replace-assets }}
+        run: sh _thps64host/.github/scripts/release_guard.sh --repo "$GITHUB_REPOSITORY" --tag "v$VERSION" --sha "$GITHUB_SHA" --assets "$(basename "$ZIP") SHA256SUMS-macOS.txt" --replace-assets "$REPLACE"
+      - name: Upload to a draft GitHub Release (never published here)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT: ${{ steps.guard.outputs.draft }}
+        run: |
+          TAG="v$VERSION"
+          PRE=""
+          case "$VERSION" in *-*) PRE="--prerelease" ;; esac
+          cp "$RUNNER_TEMP/pkg/SHA256SUMS" "$RUNNER_TEMP/pkg/SHA256SUMS-macOS.txt"
+          if [ "$DRAFT" = yes ]; then
+            # the guard has checked: same target commit, and these names are new or replace-assets was given
+            gh release upload "$TAG" "$ZIP" "$RUNNER_TEMP/pkg/SHA256SUMS-macOS.txt" --clobber
+          else
+            gh release create "$TAG" --draft $PRE --target "$GITHUB_SHA" --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" \
+              "$ZIP" "$RUNNER_TEMP/pkg/SHA256SUMS-macOS.txt"
+          fi
+          target=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" -q ".[] | select(.tag_name == \"$TAG\") | .target_commitish")
+          [ "$target" = "$GITHUB_SHA" ] || { echo "::error title=Draft target changed::After the upload the draft $TAG targets '$target', not $GITHUB_SHA. Check the Releases page for a second draft or a concurrent run, delete the wrong one, and run again."; exit 1; }
+          sum=$(shasum -a 256 "$ZIP" | awk '{print $1}')
+          {
+            echo "### Draft release $TAG"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| commit | \`$GITHUB_SHA\` |"
+            echo "| host | THPS64Host $HOST_TAG |"
+            echo "| run | $GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT) |"
+            echo "| asset | \`$(basename "$ZIP")\` |"
+            echo "| SHA-256 | \`$sum\` |"
+            echo
+            echo "For the release manifest (private workspace; download the draft's zip first):"
+            echo
+            echo '```'
+            echo "python3 -I tools/release_manifest.py set-run --game $GAME --workflow release --run-id $GITHUB_RUN_ID"
+            echo "python3 -I tools/release_manifest.py add-zip --game $GAME --platform macOS <downloaded $(basename "$ZIP")>"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

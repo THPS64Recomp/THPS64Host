@@ -1,0 +1,23 @@
+// Generated per code class by CMake (src/payload.cpp.in): registers the class's recompiled functions
+// as a thps::Payload. Compiled with -include <class>/namespace.h, so every name the class's generated C
+// defines is prefixed "@THPS_CLASS@_" and several classes link into one executable. The static
+// tables below are internal to this translation unit. Games with front-end overlays (game/game.toml `overlays`)
+// add the class's overlay table, versions/<class>/overlay_table.inc.
+#include "versions.h"
+#include "recomp_overlays.inl"
+
+namespace {
+#if @THPS_HAS_OVERLAYS@
+const thps::OverlayInfo k_overlays[] = {
+@THPS_OVERLAY_INCLUDE@
+};
+#endif
+const thps::Payload k_payload{
+    "@THPS_CLASS@", section_table, num_sections, overlay_sections_by_index,
+    sizeof(overlay_sections_by_index) / sizeof(overlay_sections_by_index[0]), recomp_entrypoint
+#if @THPS_HAS_OVERLAYS@
+    , k_overlays, sizeof(k_overlays) / sizeof(k_overlays[0])
+#endif
+};
+const thps::PayloadRegistrar k_registrar{k_payload};
+}  // namespace
