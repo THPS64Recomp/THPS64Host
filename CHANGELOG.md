@@ -27,6 +27,24 @@ release, the release lists it under a **Games must** heading.
   change. The picture fills the frame the game left black: nothing is cut off. The control command `border original|fill`
   switches it for one run. Test step `border` and the shared `tests/crop_sessions.py` (`crop_two_players` for the split
   screen).
+- Settings menu, Controls tab: rebinding. Each N64 input has a row with two controller slots, two keyboard slots and a
+  Default button; choosing a slot takes the next button, trigger, stick direction or key (Esc / Back cancel, Backspace
+  empties the slot, 5 s timeout). A button another action already uses is swapped with it, except that menu accept and
+  back (N64 A, B) may share a button with a trick, as the presets do. Changes work at once and are saved to
+  `controls.cfg` (`preset = custom`; the first change of a session keeps the old file as `controls.cfg.bak`). A slot whose
+  binding differs from the layout's default is drawn in yellow (`ui state` lists them as `marked=`), and a Reset all to
+  default button puts every binding back to the layout loaded or picked last, after a second press to confirm.
+- Settings menu, Controls tab: a Controllers list with each controller's player and the buttons it presses right now,
+  Player 1 / Player 2 buttons and Swap players 1 and 2. One controller can be player 2 while the keyboard alone is
+  player 1. The choice lasts until you quit.
+- Tests: `menu-controls`, `menu-controls-reload` and `menu-ports` sessions (virtual pads), the `ui_nav`, `ui_status` and
+  `file_lacks` steps, and `--control "ports [swap | assign N P]"`.
+
+### Fixed
+- THPS2/3: the east-button split (flip while skating, back in menus) turned off as soon as `controls.cfg` stopped
+  matching a preset, so Xbox B flipped and grabbed at once. It now follows the bindings.
+- A `controls.cfg` whose `preset =` line names a preset but whose bindings were edited by hand loads as `custom`.
+- Pad navigation in the settings menu reaches elements inside a scrolling list.
 
 ## [0.1.0] - 2026-10-18
 

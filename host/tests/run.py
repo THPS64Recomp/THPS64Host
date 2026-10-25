@@ -960,6 +960,36 @@ class Session:
             self.inst.send("ui " + st[1])
             self.inst.expect("ok ui", 30)
             self.inst.wait_frames(st[2] if len(st) > 2 else 12)
+        elif kind == "ui_nav":
+            # ("ui_nav", "pad down", REGEX, MAX): repeat a ui command (as "ui ...") until `ui state` focus matches REGEX, at most MAX times
+            # (pad / keyboard navigation to an element whose place in the tab order depends on the layout).
+            for i in range(st[3] + 1):
+                focus = self.ui_state().get("focus", "")
+                if re.fullmatch(st[2], focus):
+                    self.notes.append(f"ui nav: focus={focus} after {i} x {st[1]}")
+                    break
+                if i == st[3]:
+                    raise StepFail(f"ui nav: focus={focus} after {st[3]} x {st[1]}, wanted /{st[2]}/")
+                self.inst.send("ui " + st[1])
+                self.inst.expect("ok ui", 30)
+                self.inst.wait_frames(6)
+        elif kind == "ui_status":
+            # ("ui_status", REGEX): the Controls tab's status line (`ui bindstatus`, the last rebind's result) matches REGEX.
+            deadline = time.monotonic() + 10 * self.slow
+            while True:
+                self.inst.send("ui bindstatus")
+                line = self.inst.expect("ok ui bindstatus", 30)
+                if re.search(st[1], line):
+                    self.notes.append(line)
+                    break
+                if time.monotonic() > deadline:
+                    raise StepFail(f"bind status {line!r}, expected /{st[1]}/")
+                time.sleep(0.25)
+        elif kind == "file_lacks":
+            p = self.config / st[1]
+            if p.exists() and re.search(st[2], p.read_text()):
+                raise StepFail(f"{p.name} has a line matching /{st[2]}/ (it must not)")
+            self.notes.append(f"{st[1]}: no /{st[2]}/")
         elif kind == "ui_state":
             # ("ui_state", "open=1 tab=0 gfx.msaa=2"[, timeout s]): `ui state` until every key=value matches (the render thread acts a frame later;
             # gfx.KEY=VALUE is a token of the graphics settings line).

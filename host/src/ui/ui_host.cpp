@@ -72,6 +72,196 @@ void gfx_changed(const std::string& key, const std::string& value) {
     ultramodern::renderer::set_graphics_config(ultramodern::renderer::get_graphics_config());
 }
 
+// ---- Controls tab: binding rows, capture, the Controllers list (render thread; ui state reads a copy) ---------------------------
+
+struct BindRow {
+    Rml::String id, label, p0, p1, k0, k1;
+    int cap = 0;   // 1-4: this row's slot (pad 0, pad 1, key 0, key 1) waits for a press
+    bool m0 = false, m1 = false, m2 = false, m3 = false;   // that slot differs from the layout's default (drawn marked: ctl-slot--changed)
+};
+struct PadRow {
+    Rml::String name, player_text, pressed;
+    int player = 0;
+    bool pressing = false;
+    int id = -1;
+};
+std::vector<BindRow> g_rows;
+std::vector<PadRow> g_pad_rows;
+std::string g_bind_status;
+Rml::DataModelHandle g_controls;
+
+constexpr int k_capture_seconds = 5;
+struct Capture {
+    int row = -1;            // -1 = none
+    bool keyboard = false;
+    int slot = 0;
+    std::chrono::steady_clock::time_point until{};
+    int shown_left = -1;     // seconds left as last drawn
+};
+Capture g_cap;
+std::atomic<bool> g_capturing{false};   // handle_event: Esc / Back / B go to the capture, not to the menu
+uint64_t g_rows_version = 0;
+std::string g_capture_info = "-";       // "ui state" capture=...: input:pad|key:slot (g_info_mutex)
+std::string g_status_copy;              // "ui bindstatus" (g_info_mutex)
+std::string g_marked_copy = "-";        // "ui state" marked=...: the ids of the slots that differ from the layout (g_info_mutex)
+bool g_confirm_reset = false;           // Reset all was pressed once: a second press resets, anything else cancels
+Rml::String g_reset_label = "Reset all to default";
+
+// One field slot as the row shows it.
+Rml::String slot_text(const std::vector<std::string>& fields, size_t i) {
+    if (i >= fields.size()) return "-";
+    std::string t = thps::input_field_label(fields[i]);
+    if (i == 1 && fields.size() > 2) t += " +" + std::to_string(fields.size() - 2);
+    return t;
+}
+
+void rebuild_rows() {
+    const int n = thps::input_count();
+    g_rows.resize(size_t(n));
+    const int left = g_cap.row >= 0 ? g_cap.shown_left : 0;
+    const std::string waiting = g_cap.keyboard ? "Press a key (" + std::to_string(left) + ")" : "Press a button (" + std::to_string(left) + ")";
+    std::string marked;
+    for (int i = 0; i < n; i++) {
+        BindRow& r = g_rows[size_t(i)];
+        const auto pad = thps::input_slots(i, false), keys = thps::input_slots(i, true);
+        r.id = thps::input_id(i);
+        r.label = thps::input_label(i);
+        r.p0 = slot_text(pad, 0), r.p1 = slot_text(pad, 1), r.k0 = slot_text(keys, 0), r.k1 = slot_text(keys, 1);
+        const auto dpad = thps::input_default_slots(i, false), dkeys = thps::input_default_slots(i, true);
+        const auto field_at = [](const std::vector<std::string>& v, size_t k) { return k < v.size() ? v[k] : std::string(); };
+        r.m0 = field_at(pad, 0) != field_at(dpad, 0), r.m1 = field_at(pad, 1) != field_at(dpad, 1);
+        r.m2 = field_at(keys, 0) != field_at(dkeys, 0), r.m3 = field_at(keys, 1) != field_at(dkeys, 1);
+        for (const auto& [m, prefix] : {std::pair{r.m0, "bp0_"}, std::pair{r.m1, "bp1_"}, std::pair{r.m2, "bk0_"}, std::pair{r.m3, "bk1_"}}) {
+            if (m) marked += (marked.empty() ? "" : ",") + std::string(prefix) + r.id;
+        }
+        r.cap = 0;
+        if (g_cap.row == i) {
+            r.cap = (g_cap.keyboard ? 3 : 1) + g_cap.slot;
+            (g_cap.keyboard ? (g_cap.slot ? r.k1 : r.k0) : (g_cap.slot ? r.p1 : r.p0)) = waiting;
+        }
+    }
+    g_rows_version = thps::input_bindings_version();
+    {
+        std::lock_guard lock{g_info_mutex};
+        g_marked_copy = marked.empty() ? "-" : marked;
+    }
+    if (g_controls) g_controls.DirtyVariable("rows");
+}
+
+// Reset all asks first: the first press arms it (the button says so), a second press resets, anything else disarms it.
+void cancel_reset_confirm() {
+    if (!g_confirm_reset) return;
+    g_confirm_reset = false;
+    g_reset_label = "Reset all to default";
+    if (g_controls) g_controls.DirtyVariable("reset_all_label");
+}
+
+void set_status(const std::string& s) {
+    g_bind_status = s;
+    {
+        std::lock_guard lock{g_info_mutex};
+        g_status_copy = s;
+    }
+    if (g_controls) g_controls.DirtyVariable("bind_status");
+    std::printf("[thps-ui] controls: %s\n", s.c_str());
+    std::fflush(stdout);
+}
+
+void set_capture_info() {
+    std::lock_guard lock{g_info_mutex};
+    g_capture_info = g_cap.row < 0 ? "-" : thps::input_id(g_cap.row) + (g_cap.keyboard ? ":key:" : ":pad:") + std::to_string(g_cap.slot);
+}
+
+void start_capture(int row, bool keyboard, int slot) {
+    if (row < 0 || row >= thps::input_count() || slot < 0 || slot > 1) return;
+    cancel_reset_confirm();
+    g_cap.row = row, g_cap.keyboard = keyboard, g_cap.slot = slot;
+    g_cap.until = std::chrono::steady_clock::now() + std::chrono::seconds(k_capture_seconds);
+    g_cap.shown_left = k_capture_seconds;
+    g_capturing = true;
+    set_capture_info();
+    set_status(thps::input_label(row) + (keyboard ? ": press a key (Esc cancels, Backspace empties the slot)"
+                                                  : ": press a button, trigger or stick direction (Back or Esc cancels, Backspace empties the slot)"));
+    rebuild_rows();
+}
+
+void end_capture(const std::string& status) {
+    g_cap.row = -1;
+    g_capturing = false;
+    set_capture_info();
+    set_status(status);
+    rebuild_rows();
+}
+
+void capture_field(const std::string& field) {
+    const auto r = thps::input_rebind(g_cap.row, g_cap.keyboard, g_cap.slot, field);
+    end_capture(r.ok ? r.message : r.reply);
+}
+
+// An event while a slot waits for a press. true = taken (it never reaches RmlUi or the menu).
+bool capture_event(const SDL_Event& ev) {
+    if (g_cap.row < 0) return false;
+    switch (ev.type) {
+        case SDL_KEYDOWN: {
+            if (ev.key.repeat) return true;
+            const SDL_Scancode sc = ev.key.keysym.scancode;
+            if (sc == SDL_SCANCODE_ESCAPE) { end_capture("Cancelled: unchanged"); return true; }
+            if (sc == SDL_SCANCODE_BACKSPACE || sc == SDL_SCANCODE_DELETE) { capture_field("none"); return true; }
+            if (!g_cap.keyboard) return true;   // a controller slot takes controller input only
+            const char* name = SDL_GetScancodeName(sc);
+            // controls.cfg separates fields with commas, so a key whose SDL name has one (Comma is ",") can't be written there.
+            if (!name || !*name || std::string(name).find(',') != std::string::npos) end_capture("That key can't be bound (its name has a comma): unchanged");
+            else capture_field(std::string("key:") + name);
+            return true;
+        }
+        case SDL_CONTROLLERBUTTONDOWN: {
+            const int b = ev.cbutton.button;
+            if (b == SDL_CONTROLLER_BUTTON_BACK || (g_cap.keyboard && b == SDL_CONTROLLER_BUTTON_B)) { end_capture("Cancelled: unchanged"); return true; }
+            if (g_cap.keyboard) return true;
+            const char* name = SDL_GameControllerGetStringForButton(SDL_GameControllerButton(b));
+            if (name) capture_field(std::string("button:") + name);
+            return true;
+        }
+        case SDL_CONTROLLERAXISMOTION: {
+            if (g_cap.keyboard) return true;
+            const int a = ev.caxis.axis, v = ev.caxis.value;
+            const bool trigger = a == SDL_CONTROLLER_AXIS_TRIGGERLEFT || a == SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+            // Triggers past half way; sticks past three quarters (a resting or drifting stick never binds).
+            if (trigger ? v < 16384 : std::abs(v) < 24576) return true;
+            const char* name = SDL_GameControllerGetStringForAxis(SDL_GameControllerAxis(a));
+            if (name) capture_field(std::string("axis:") + name + (trigger || v > 0 ? "+" : "-"));
+            return true;
+        }
+        case SDL_MOUSEBUTTONDOWN:
+            end_capture("Cancelled: unchanged");
+            return true;
+        case SDL_MOUSEMOTION:
+            return false;
+        default:
+            return true;
+    }
+}
+
+void refresh_pads() {
+    std::vector<PadRow> rows;
+    for (const auto& p : thps::input_pads()) {
+        PadRow r;
+        r.name = p.name;
+        r.player = p.player;
+        r.player_text = p.player ? "Player " + std::to_string(p.player) : "No player yet";
+        r.pressing = !p.pressed.empty();
+        r.pressed = r.pressing ? p.pressed : "-";
+        r.id = p.id;
+        rows.push_back(std::move(r));
+    }
+    auto same = [](const PadRow& a, const PadRow& b) {
+        return a.name == b.name && a.player == b.player && a.pressed == b.pressed && a.id == b.id;
+    };
+    if (rows.size() == g_pad_rows.size() && std::equal(rows.begin(), rows.end(), g_pad_rows.begin(), same)) return;
+    g_pad_rows = std::move(rows);
+    if (g_controls) g_controls.DirtyVariable("pads");
+}
+
 // ---- RmlUi side (render thread only) -------------------------------------------------------------------------
 
 struct UiState {
@@ -171,12 +361,88 @@ void build_models(Rml::Context* ctx) {
         // The layout presets of input.cpp (controls.cfg "preset = ..."); an edited controls.cfg reads "custom" and checks neither.
         bind_string(c, "preset", [] { return thps::input_preset_name(); },
                     [](const std::string& v) {
+                        cancel_reset_confirm();
                         const std::string r = thps::input_set_preset(v);
                         std::printf("[thps] settings: controls preset %s -> %s\n", v.c_str(), r.c_str());
                         std::fflush(stdout);
+                        if (g_controls) g_controls.DirtyVariable("preset_is_custom");
                     });
         c.BindFunc("config_dir", [](Rml::Variant& v) { v = Rml::String(thps::platform::to_utf8(g_config_dir)); });
         c.BindFunc("preset_is_custom", [](Rml::Variant& v) { v = thps::input_preset_name() == "custom"; });
+        // Binding rows (rebinding) and the Controllers list.
+        if (auto r = c.RegisterStruct<BindRow>()) {
+            r.RegisterMember("id", &BindRow::id);
+            r.RegisterMember("label", &BindRow::label);
+            r.RegisterMember("p0", &BindRow::p0);
+            r.RegisterMember("p1", &BindRow::p1);
+            r.RegisterMember("k0", &BindRow::k0);
+            r.RegisterMember("k1", &BindRow::k1);
+            r.RegisterMember("cap", &BindRow::cap);
+            r.RegisterMember("m0", &BindRow::m0);
+            r.RegisterMember("m1", &BindRow::m1);
+            r.RegisterMember("m2", &BindRow::m2);
+            r.RegisterMember("m3", &BindRow::m3);
+        }
+        c.RegisterArray<std::vector<BindRow>>();
+        if (auto r = c.RegisterStruct<PadRow>()) {
+            r.RegisterMember("name", &PadRow::name);
+            r.RegisterMember("player_text", &PadRow::player_text);
+            r.RegisterMember("pressed", &PadRow::pressed);
+            r.RegisterMember("player", &PadRow::player);
+            r.RegisterMember("pressing", &PadRow::pressing);
+        }
+        c.RegisterArray<std::vector<PadRow>>();
+        rebuild_rows();
+        g_bind_status = "Choose a slot, then press the new button or key.";
+        c.Bind("rows", &g_rows);
+        c.Bind("pads", &g_pad_rows);
+        c.Bind("bind_status", &g_bind_status);
+        c.Bind("reset_all_label", &g_reset_label);
+        c.BindEventCallback("reset_all", [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            if (g_cap.row >= 0) end_capture("Cancelled: unchanged");
+            const std::string base = thps::input_base_preset();
+            const std::string layout = base == "n64" ? "N64 layout" : "face-button layout";
+            if (!g_confirm_reset) {
+                g_confirm_reset = true;
+                g_reset_label = "Confirm: reset all";
+                if (g_controls) g_controls.DirtyVariable("reset_all_label");
+                set_status("Put every binding back to the " + layout + "? Choose Confirm to do it; anything else cancels.");
+                return;
+            }
+            cancel_reset_confirm();
+            const std::string r = thps::input_set_preset(base);
+            std::printf("[thps] settings: controls reset all -> %s\n", r.c_str());
+            std::fflush(stdout);
+            rebuild_rows();
+            if (g_controls) g_controls.DirtyVariable("preset"), g_controls.DirtyVariable("preset_is_custom");
+            set_status(r.rfind("ok", 0) == 0 ? "Every binding is back to the " + layout + " (controls.cfg.bak keeps the old file)" : r);
+        });
+        c.BindEventCallback("rebind", [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (args.size() < 3) return;
+            start_capture(args[0].Get<int>(), args[1].Get<int>() != 0, args[2].Get<int>());
+        });
+        c.BindEventCallback("reset_row", [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (args.empty()) return;
+            if (g_cap.row >= 0) end_capture("Cancelled: unchanged");
+            cancel_reset_confirm();
+            const auto r = thps::input_reset_input(args[0].Get<int>());
+            set_status(r.ok ? r.message : r.reply);
+            rebuild_rows();
+        });
+        c.BindEventCallback("set_player", [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+            if (args.size() < 2) return;
+            const int i = args[0].Get<int>(), player = args[1].Get<int>();
+            if (i < 0 || i >= int(g_pad_rows.size()) || player < 1 || player > 2) return;
+            cancel_reset_confirm();
+            thps::input_assign_port(g_pad_rows[size_t(i)].id, player - 1);
+            set_status(g_pad_rows[size_t(i)].name + " is player " + std::to_string(player));
+        });
+        c.BindEventCallback("swap_players", [](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&) {
+            cancel_reset_confirm();
+            thps::input_swap_ports();
+            set_status("Players 1 and 2 swapped");
+        });
+        g_controls = c.GetModelHandle();
     }
     if (auto c = ctx->CreateDataModel("graphics_model")) {
         g_handles.push_back(c.GetModelHandle());
@@ -320,6 +586,58 @@ void switch_tab(UiState& ui, int delta) {
     if (n > 0) set_tab(ui, (tabs->GetActiveTab() + delta + n) % n);
 }
 
+// RmlUi's spatial navigation looks only inside the focused element's nearest scroll container and never enters another one, so
+// in the Controls tab (a scrolling list) Up / Down could neither go from the tab bar into the list nor back out of it; and from a
+// row of radio buttons whose labels wrap differently it took the row's other radio for "below". When an Up / Down press left the
+// focus where it was or in the same row (same parent), search the whole visible menu again, rows first: the distance along the
+// direction plus a tenth of the sideways gap (RmlUi weighs the gap 10000x, which skips a row whose buttons sit to one side), and
+// scroll the element found into view.
+void collect_focusable(Rml::Element* e, std::vector<Rml::Element*>& out) {
+    for (int i = 0; i < e->GetNumChildren(true); i++) {   // with non-DOM children: a tabset keeps its tabs and panels there
+        Rml::Element* c = e->GetChild(i);
+        if (!c->IsVisible()) continue;
+        const auto& cv = c->GetComputedValues();
+        if (cv.focus() == Rml::Style::Focus::None) continue;
+        if (cv.tab_index() == Rml::Style::TabIndex::Auto) out.push_back(c);
+        collect_focusable(c, out);
+    }
+}
+
+bool nav_fallback(UiState& ui, Rml::Element* from, bool down) {
+    if (!from || !ui.menu || from == ui.context->GetRootElement() || from->GetTagName() == "body") return false;
+    std::vector<Rml::Element*> all;
+    collect_focusable(ui.menu, all);
+    auto box = [](Rml::Element* e) {
+        const Rml::Vector2f p = e->GetAbsoluteOffset(Rml::BoxArea::Border);
+        return std::pair{p, p + e->GetBox().GetSize(Rml::BoxArea::Border)};
+    };
+    const auto [a0, a1] = box(from);
+    Rml::Element* best = nullptr;
+    float best_h = 0;
+    for (Rml::Element* e : all) {
+        if (e == from || e->GetParentNode() == from->GetParentNode()) continue;
+        const auto [b0, b1] = box(e);
+        const float main = down ? b0.y - a1.y : a0.y - b1.y;
+        if (main < 0) continue;
+        const float h = main + 0.1f * (std::max(0.0f, b0.x - a1.x) + std::max(0.0f, a0.x - b1.x));
+        if (!best || h < best_h) best = e, best_h = h;
+    }
+    if (!best) return false;
+    best->Focus(true);
+    best->ScrollIntoView(Rml::ScrollIntoViewOptions(Rml::ScrollAlignment::Nearest, Rml::ScrollAlignment::Nearest));
+    return true;
+}
+
+// A navigation key (pad D-pad, stick, arrows) for RmlUi, with the fallback above for Up / Down.
+void nav_key_down(UiState& ui, int sdl_key) {
+    Rml::Element* before = ui.context->GetFocusElement();
+    ui.context->ProcessKeyDown(RmlSDL::ConvertKey(sdl_key), 0);
+    if ((sdl_key != SDLK_UP && sdl_key != SDLK_DOWN) || !before) return;
+    Rml::Element* after = ui.context->GetFocusElement();
+    if (after != before && !(after && after->GetParentNode() == before->GetParentNode())) return;
+    if (!nav_fallback(ui, before, sdl_key == SDLK_DOWN) && after != before) before->Focus(true);   // nothing further: stay put
+}
+
 void pad_button_down(UiState& ui, int button) {
     using clock = std::chrono::steady_clock;
     if (button == SDL_CONTROLLER_BUTTON_LEFTSHOULDER) return switch_tab(ui, -1);
@@ -329,7 +647,7 @@ void pad_button_down(UiState& ui, int button) {
     b.button = Uint8(button);
     const int k = cont_button_to_key(b);
     if (!k) return;
-    ui.context->ProcessKeyDown(RmlSDL::ConvertKey(k), 0);
+    nav_key_down(ui, k);
     ui.latest_cont_key = k;
     ui.next_repeat = clock::now() + std::chrono::milliseconds(500);
 }
@@ -383,10 +701,14 @@ void draw_hook(plume::RenderCommandList* list, plume::RenderFramebuffer* swap_ch
         ui.menu_shown = open;
         if (ui.menu) {
             if (open) {
+                cancel_reset_confirm();
+                rebuild_rows();
+                refresh_pads();
                 for (auto& h : g_handles) h.DirtyAllVariables();   // values may have changed since (cfg edits, --control)
                 ui.menu->Show();
                 set_tab(ui, 0);   // always opens on General, with the focus on the tab bar (pad / keyboard navigation starts there)
             } else {
+                if (g_cap.row >= 0) end_capture("Cancelled: unchanged");
                 ui.menu->Hide();
             }
         }
@@ -408,6 +730,8 @@ void draw_hook(plume::RenderCommandList* list, plume::RenderFramebuffer* swap_ch
     }
     if (!click_id.empty() && ui.menu) {
         if (Rml::Element* el = ui.menu->GetElementById(click_id)) {
+            // A person scrolls to it first (the Controls tab's list is longer than the window).
+            el->ScrollIntoView(Rml::ScrollIntoViewOptions(Rml::ScrollAlignment::Nearest, Rml::ScrollAlignment::Nearest));
             // Element centre in context pixels -> window points -> real SDL events (same path as a mouse).
             const Rml::Vector2f c = el->GetAbsoluteOffset(Rml::BoxArea::Border) + el->GetBox().GetSize(Rml::BoxArea::Border) * 0.5f;
             int ww2 = 1, wh2 = 1, pw2 = 1, ph2 = 1;
@@ -436,6 +760,7 @@ void draw_hook(plume::RenderCommandList* list, plume::RenderFramebuffer* swap_ch
     static int stick_x = 0, stick_y = 0;
     for (SDL_Event& ev : events) {
         if (!open) continue;
+        if (capture_event(ev)) continue;   // a binding slot waits for a press
         if (ev.type == SDL_CONTROLLERBUTTONDOWN) {
             pad_button_down(ui, ev.cbutton.button);
             continue;
@@ -460,6 +785,10 @@ void draw_hook(plume::RenderCommandList* list, plume::RenderFramebuffer* swap_ch
         if (ev.type == SDL_KEYDOWN && !ev.key.repeat && (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER || ev.key.keysym.sym == SDLK_SPACE)) {
             if (activate_focus(ui)) continue;   // Enter / Space on a radio button, tab or button (RmlUi alone only does it for some)
         }
+        if (ev.type == SDL_KEYDOWN && (ev.key.keysym.sym == SDLK_UP || ev.key.keysym.sym == SDLK_DOWN) && !(ev.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI))) {
+            nav_key_down(ui, ev.key.keysym.sym);   // arrows: as the D-pad (with the scroll-container fallback)
+            continue;
+        }
         // The SDL backend takes window points; the context is in pixels (Retina: 2x).
         if (ev.type == SDL_MOUSEMOTION) { ev.motion.x = int(ev.motion.x * sx); ev.motion.y = int(ev.motion.y * sy); }
         RmlSDL::InputEventHandler(ui.context, ev);
@@ -474,8 +803,23 @@ void draw_hook(plume::RenderCommandList* list, plume::RenderFramebuffer* swap_ch
             std::fflush(stdout);
         }
     }
+    if (open) {
+        if (g_cap.row >= 0) {
+            const auto now = clock::now();
+            if (now >= g_cap.until) end_capture("No input in " + std::to_string(k_capture_seconds) + " seconds: unchanged");
+            else if (int left = int(std::chrono::duration_cast<std::chrono::milliseconds>(g_cap.until - now).count() / 1000) + 1; left != g_cap.shown_left) {
+                g_cap.shown_left = left;
+                rebuild_rows();
+            }
+        }
+        if (thps::input_bindings_version() != g_rows_version) {   // a rebind, a preset, --control bind
+            rebuild_rows();
+            if (g_controls) g_controls.DirtyVariable("preset"), g_controls.DirtyVariable("preset_is_custom");
+        }
+        refresh_pads();
+    }
     if (open && ui.latest_cont_key && clock::now() >= ui.next_repeat) {
-        ui.context->ProcessKeyDown(RmlSDL::ConvertKey(ui.latest_cont_key), 0);
+        nav_key_down(ui, ui.latest_cont_key);
         ui.next_repeat += std::chrono::milliseconds(50);
     }
 
@@ -563,7 +907,7 @@ std::string control(const std::string& args) {
             {"back", SDL_CONTROLLER_BUTTON_BACK}, {"start", SDL_CONTROLLER_BUTTON_START}, {"up", SDL_CONTROLLER_BUTTON_DPAD_UP},
             {"down", SDL_CONTROLLER_BUTTON_DPAD_DOWN}, {"left", SDL_CONTROLLER_BUTTON_DPAD_LEFT}, {"right", SDL_CONTROLLER_BUTTON_DPAD_RIGHT},
             {"a", SDL_CONTROLLER_BUTTON_A}, {"b", SDL_CONTROLLER_BUTTON_B}, {"lb", SDL_CONTROLLER_BUTTON_LEFTSHOULDER},
-            {"rb", SDL_CONTROLLER_BUTTON_RIGHTSHOULDER}};
+            {"rb", SDL_CONTROLLER_BUTTON_RIGHTSHOULDER}, {"x", SDL_CONTROLLER_BUTTON_X}, {"y", SDL_CONTROLLER_BUTTON_Y}};
         for (const auto& [n, b] : names) {
             if (name != n) continue;
             SDL_Event d{};
@@ -577,7 +921,7 @@ std::string control(const std::string& args) {
             SDL_PushEvent(&u);
             return "ok ui pad " + name;
         }
-        return "err ui pad back|start|up|down|left|right|a|b|lb|rb";
+        return "err ui pad back|start|up|down|left|right|a|b|x|y|lb|rb";
     }
     if (cmd == "key") {   // a keyboard key press (arrows, return, tab, space)
         std::string name;
@@ -585,7 +929,7 @@ std::string control(const std::string& args) {
         static const std::pair<const char*, std::pair<int, int>> names[] = {
             {"up", {SDLK_UP, SDL_SCANCODE_UP}}, {"down", {SDLK_DOWN, SDL_SCANCODE_DOWN}}, {"left", {SDLK_LEFT, SDL_SCANCODE_LEFT}},
             {"right", {SDLK_RIGHT, SDL_SCANCODE_RIGHT}}, {"return", {SDLK_RETURN, SDL_SCANCODE_RETURN}}, {"tab", {SDLK_TAB, SDL_SCANCODE_TAB}},
-            {"space", {SDLK_SPACE, SDL_SCANCODE_SPACE}}};
+            {"space", {SDLK_SPACE, SDL_SCANCODE_SPACE}}, {"backspace", {SDLK_BACKSPACE, SDL_SCANCODE_BACKSPACE}}};
         for (const auto& [n, k] : names) {
             if (name != n) continue;
             SDL_Event d{};
@@ -598,7 +942,7 @@ std::string control(const std::string& args) {
             SDL_PushEvent(&u);
             return "ok ui key " + name;
         }
-        return "err ui key up|down|left|right|return|tab|space";
+        return "err ui key up|down|left|right|return|tab|space|backspace";
     }
     if (cmd == "state") {
         std::string focus;
@@ -606,14 +950,24 @@ std::string control(const std::string& args) {
             std::lock_guard lock{g_info_mutex};
             focus = g_focus_id;
         }
-        char buf[768];
-        std::snprintf(buf, sizeof buf, "ok ui open=%d tab=%d focus=%s hint=%d hint_scheduled=%d input_nz=%llu skip_intro=%d show_fps=%d volume=%.0f preset=%s cheats=%s gfx: %s",
-                      int(g_open.load()), g_active_tab.load(), focus.empty() ? "-" : focus.c_str(), int(g_hint_visible.load()),
+        std::string capture, marked;
+        {
+            std::lock_guard lock{g_info_mutex};
+            capture = g_capture_info;
+            marked = g_marked_copy;
+        }
+        char buf[1400];
+        std::snprintf(buf, sizeof buf, "ok ui open=%d tab=%d focus=%s capture=%s marked=%s pads=%zu hint=%d hint_scheduled=%d input_nz=%llu skip_intro=%d show_fps=%d volume=%.0f preset=%s cheats=%s gfx: %s",
+                      int(g_open.load()), g_active_tab.load(), focus.empty() ? "-" : focus.c_str(), capture.c_str(), marked.c_str(), thps::input_pads().size(), int(g_hint_visible.load()),
                       int(g_hint_pending.load()), (unsigned long long)thps::stats.input_nonzero.load(), int(thps::settings::skip_intro()), int(thps::settings::show_fps()),
                       thps::settings::volume() * 100.0f, thps::input_preset_name().c_str(), cheats_state().c_str(), thps::gfx_describe().c_str());
         return buf;
     }
-    return "err ui usage: ui esc | click X Y | click #ELEMENT_ID | tab N | pad NAME | key NAME | state";
+    if (cmd == "bindstatus") {   // the Controls tab's status line (the last rebind's result)
+        std::lock_guard lock{g_info_mutex};
+        return "ok ui bindstatus " + (g_status_copy.empty() ? std::string("-") : g_status_copy);
+    }
+    return "err ui usage: ui esc | click X Y | click #ELEMENT_ID | tab N | pad NAME | key NAME | state | bindstatus";
 }
 
 bool menu_open() { return g_open.load(); }
@@ -628,6 +982,11 @@ bool handle_event(const SDL_Event& ev) {
     const bool esc = ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE;
     const bool back = ev.type == SDL_CONTROLLERBUTTONDOWN && ev.cbutton.button == SDL_CONTROLLER_BUTTON_BACK;
     const bool pad_b = ev.type == SDL_CONTROLLERBUTTONDOWN && ev.cbutton.button == SDL_CONTROLLER_BUTTON_B;
+    if (g_open.load() && g_capturing.load() && (esc || back || pad_b)) {   // a binding slot waits: these cancel it or bind (B)
+        std::lock_guard lock{g_queue_mutex};
+        if (g_queue.size() < 256) g_queue.push_back(ev);
+        return true;
+    }
     if ((esc && !ev.key.repeat) || back || (pad_b && g_open.load())) {
         g_open = (pad_b ? false : !g_open.load());
         return true;

@@ -5,7 +5,7 @@
 Checks, each in a fresh temp config dir:
   1. the pre-Q19 generated N64 layout (any field order, lines missing) is moved to thps-xbox, the old
      file is kept as controls.cfg.pre-xbox.bak, one log line, and it is not migrated again;
-  2. a hand-edited file, and a file saying "preset = n64", are left alone;
+  2. a hand-edited file, a file saying "preset = n64", and a file a preset-aware build wrote and the user then edited, are left alone;
   3. --controls-preset n64 / thps-xbox rewrite the file (old one kept as controls.cfg.bak) and stick;
   4. a bad preset name exits 2.
 """
@@ -101,6 +101,16 @@ with tempfile.TemporaryDirectory(prefix="thps1-ctl-") as tmp:
     rc, out = run(d)
     check("moved to preset" not in out and (d / "controls.cfg").read_text() == edited and not (d / "controls.cfg.pre-xbox.bak").exists(),
           "hand-edited file: untouched, no backup")
+
+    # a file a build with presets wrote ("preset = thps-xbox"), then edited by hand: loaded as custom, never rewritten
+    d = tmp / "marked-edit"; d.mkdir()
+    rc, out = run(d)                                   # writes the default file
+    marked = (d / "controls.cfg").read_text().replace("\nc_up = key:I,", "\nc_up = key:U,")
+    check("preset = thps-xbox" in marked and "c_up = key:U," in marked, "marked file: test edit applied")
+    (d / "controls.cfg").write_text(marked)
+    rc, out = run(d)
+    check("moved to preset" not in out and (d / "controls.cfg").read_text() == marked and not (d / "controls.cfg.bak").exists(),
+          "hand-edited file with a preset line: untouched, no backup")
 
     # presets
     d = tmp / "preset"; d.mkdir()
