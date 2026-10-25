@@ -8,7 +8,8 @@ is behind the menu, only on what the menu draws and what it saves. A fresh setti
                the pad is blocked from the game while it is open and reaches it after; mouse clicks change Show FPS, MSAA, Aspect, Resolution and Frame Rate and
                write general.cfg / graphics.cfg; the pad's Back opens, D-pad / LB / RB navigate, A picks the N64 layout, B closes, the
                volume slider moves (a click on its track, then the D-pad); the settings are written to controls.cfg / general.cfg.
-  menu-hud     the HUD Placement radio (Graphics tab) writes graphics.cfg hud=... and the renderer gets it.
+  menu-hud     the HUD Placement radio (Graphics tab) writes graphics.cfg hud=... and the renderer gets it; so does the Two-Player Split
+               Screen radio (split=original|wide).
   menu-reload  a new process on the same folder: every setting persisted, and the hint does not show again.
 """
 
@@ -162,6 +163,21 @@ MENU_SESSIONS = [
             ("log", r"gfx: aspect=16:9 .* hud=expand"),
             ("ui", "click #lbl_hud_original"),
             ("file_contains", "graphics.cfg", r"(?m)^hud=original$"),
+            ("ui", "esc"),
+        ]),
+        ("menu_split_click", "Two-Player Split Screen (Graphics tab): Original, then Fill picture -> graphics.cfg split=original|wide and the live switch", [
+            ("ui", "esc"),
+            ("ui_state", "open=1"),
+            ("ui", "tab 2"),
+            ("ctl_match", "split", r"wide=1 "),
+            ("ui", "click #lbl_split_original"),
+            ("file_contains", "graphics.cfg", r"(?m)^split=original$"),
+            ("log", r"gfx: aspect=16:9 .* split=original"),
+            ("ctl_match", "split", r"wide=0 "),
+            ("ui", "click #lbl_split_wide"),
+            ("file_contains", "graphics.cfg", r"(?m)^split=wide$"),
+            ("log", r"gfx: aspect=16:9 .* hud=original split=wide"),   # a new line: at start hud was expand
+            ("ctl_match", "split", r"wide=1 "),
             ("ui", "esc"),
         ]),
     ]),

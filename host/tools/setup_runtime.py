@@ -72,7 +72,8 @@ UI_FONTS = {   # path in Zelda64Recomp's assets/ -> SHA-256 (all SIL OFL 1.1; th
     "NotoEmoji-Regular.ttf": "415dc6290378574135b64c808dc640c1df7531973290c4970c51fdeb849cb0c5",
     "promptfont/promptfont.ttf": "7206e62fdb7e07fdf137e52464d7fa862f2f8dc79931fa6500e6ceb8ed1f06b9",
 }
-RT64_PATCHES = ["rt64-hlslpp-labs.patch", "rt64-present-capture-widescreen.patch", "rt64-hfr.patch", "rt64-metal-clear-state.patch"]
+RT64_PATCHES = ["rt64-hlslpp-labs.patch", "rt64-present-capture-widescreen.patch", "rt64-hfr.patch", "rt64-metal-clear-state.patch",
+                "rt64-splitscreen-widescreen.patch"]
 # N64ModernRuntime: "RSP done" goes to the game after RT64 has parsed the display list (see the patch's header).
 NMR_PATCHES = ["ultramodern-sp-complete-after-dl.patch"]
 # Submodules a --patches-only checkout needs (the patched files only).

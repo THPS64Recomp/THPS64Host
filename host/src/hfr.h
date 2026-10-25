@@ -25,13 +25,14 @@ bool hfr_arg(int argc, char** argv, int& i);
 // HUD placement (src/hud_anchor.cpp): graphics setting `hud` = original | 16:9 | expand. Gfx thread: bracketed around RT64's
 // interpretation of a gfx task, and per display-list command from the commandHook (interpolation.cpp).
 bool hud_supported();                      // the game's HUD placement is implemented (game.toml hud_placement)
-bool hud_active();                         // placement is on right now (hud != original, widescreen, supported)
-void hud_set_mode(bool on);                // gfx_config.cpp publish(): placement on (hud != original, widescreen, supported)
+bool hud_active();                         // placement is on right now (hud != original, widescreen, supported; or a widened split screen)
+void hud_set_mode(bool on, bool split_on); // gfx_config.cpp publish(): placement on (hud != original, widescreen, supported); split-screen placement on (widescreen)
 void hud_task_begin(RT64::State* state, const uint8_t* rdram, uint32_t dl_address);
 void hud_task_end(RT64::State* state);
 void hud_command(RT64::State* state, uint32_t w0, uint32_t w1);
 bool hud_arg(int argc, char** argv, int& i);   // --hud-debug N
 std::string hud_report();                  // control "hud"
+std::string split_report();                // control "split": split-screen widening counters (RT64 patch) and the 2P HUD
 
 // Stable matrix-group IDs for RT64's pairing (src/interp_ids.cpp). Gfx thread: bracketed around RT64's interpretation of a gfx task
 // (task_begin walks the display list), and per display-list command from the commandHook (interpolation.cpp).

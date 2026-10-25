@@ -14,6 +14,7 @@
 //   msaa      0 | 2 | 4 | 8
 //   refresh   original | display | N             (frame interpolation target; src/interpolation.cpp)
 //   hud       original | 16:9 | expand            (HUD placement in widescreen; src/hud_anchor.cpp; default kDefaultHud = expand, host.h)
+//   split     wide | original                    (two-player split screens fill the wide picture; original = both views in the 4:3 area; default wide)
 //   cfg_rev   N                                   (written by the host, not a setting: which defaults the file was saved under; see gfx_config_load)
 #include <cstdio>
 #include <cstdlib>
@@ -63,7 +64,7 @@ static bool parse_wxh(const std::string& v, int& w, int& h) {
 
 static void publish() {
     target_aspect = gfx.aspect == "expand" ? -1.0f : gfx.aspect_ratio();
-    hud_set_mode(gfx.hud != "original" && gfx.aspect != "original");
+    hud_set_mode(gfx.hud != "original" && gfx.aspect != "original", gfx.aspect != "original");
 }
 
 bool gfx_config_set(const std::string& key, const std::string& value) {
@@ -98,6 +99,9 @@ bool gfx_config_set(const std::string& key, const std::string& value) {
     } else if (key == "hud") {
         if (value != "original" && value != "16:9" && value != "expand") return false;
         gfx.hud = value;
+    } else if (key == "split") {
+        if (value != "wide" && value != "original") return false;
+        gfx.split_wide = value == "wide";
     } else if (key == "fullscreen") {
         gfx.fullscreen = value == "1";
     } else {
@@ -185,7 +189,7 @@ void gfx_config_save(const std::filesystem::path& file) {
     tmp += ".tmp";
     {
         std::ofstream out(tmp);
-        out << "# " << thps::game::short_name << " recomp host graphics settings (" << thps::game::family << "_recomp --aspect/--window/--res-scale/--msaa/--fullscreen/--refresh)\n";
+        out << "# " << thps::game::short_name << " recomp host graphics settings (" << thps::game::family << "_recomp --aspect/--window/--res-scale/--msaa/--fullscreen/--refresh/--hud/--split)\n";
         out << "cfg_rev=" << kCfgRev << "\n";
         out << "aspect=" << gfx.aspect << "\n";
         out << "window=" << (gfx.window_auto ? std::string("auto") : std::to_string(gfx.window_w) + "x" + std::to_string(gfx.window_h)) << "\n";
@@ -193,6 +197,7 @@ void gfx_config_save(const std::filesystem::path& file) {
         out << "msaa=" << gfx.msaa << "\n";
         out << "fullscreen=" << (gfx.fullscreen ? 1 : 0) << "\n";
         if (hud_supported()) out << "hud=" << gfx.hud << "\n";
+        out << "split=" << (gfx.split_wide ? "wide" : "original") << "\n";
         out << "refresh=" << (gfx.refresh < 0 ? std::string("display") : gfx.refresh == 0 ? std::string("original") : std::to_string(gfx.refresh)) << "\n";
     }
     std::error_code ec;
@@ -200,10 +205,10 @@ void gfx_config_save(const std::filesystem::path& file) {
 }
 
 std::string gfx_describe() {
-    char buf[260];
-    std::snprintf(buf, sizeof buf, "aspect=%s window=%dx%d%s res_scale=%d downsample=%d msaa=%d fullscreen=%d refresh=%d hpfb=%d hud=%s",
+    char buf[280];
+    std::snprintf(buf, sizeof buf, "aspect=%s window=%dx%d%s res_scale=%d downsample=%d msaa=%d fullscreen=%d refresh=%d hpfb=%d hud=%s split=%s",
                   gfx.aspect.c_str(), gfx.window_w, gfx.window_h, gfx.window_auto ? "(auto)" : "", gfx.res_scale, gfx.downsample, gfx.msaa, int(gfx.fullscreen),
-                  gfx.refresh, gfx.hpfb, gfx.hud.c_str());
+                  gfx.refresh, gfx.hpfb, gfx.hud.c_str(), gfx.split_wide ? "wide" : "original");
     return buf;
 }
 

@@ -345,12 +345,20 @@ std::string hfr_perf_text() {
 //   pcap EVERY [DIR]       present captures every EVERY composited frames (0 = off) into DIR
 //                          (default: --dump-dir); PNGs at --present-size
 //   hud                    HUD placement counters (src/hud_anchor.cpp)
+//   split [on|off]         the split setting (wide = on) live, not saved (A/B), and the split-screen widening counters (src/hud_anchor.cpp, RT64 patch)
 //   hfr                    the cumulative pairing counters
 //   projids [on|off]       the projection-kind IDs (switch for A/B) and how many camera / shadow loads were tagged
 //   vpsplit [on|off]       the host's view-projection split (switch for A/B) and its counters
 bool hfr_control(const std::string& cmd, std::istringstream& in) {
     if (cmd == "hud") {
         reply("ok hud " + hud_report());
+        return true;
+    }
+    if (cmd == "split") {   // split [on|off]: the split setting live (A/B on a paused frame), and the counters
+        std::string v;
+        in >> v;
+        if (v == "on" || v == "off") gfx.split_wide = v == "on";   // live, for this run only (not saved; the menu row and --split save it)
+        reply("ok split " + split_report());
         return true;
     }
     if (cmd == "projids") {   // projids [on|off]: the projection-kind IDs (above), and how many loads were tagged

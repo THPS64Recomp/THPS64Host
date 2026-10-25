@@ -114,6 +114,7 @@ struct GfxConfig {
     int refresh = -1;                 // 0 = original (30), -1 = display, N = manual target (frame interpolation)
     int hpfb = -1;                    // high-precision framebuffer: -1 auto, 0 off, 1 on
     std::string hud = kDefaultHud;    // HUD placement (src/hud_anchor.cpp): original (centred 4:3) | 16:9 (to the 16:9 edges) | expand (to the window's edges)
+    bool split_wide = true;           // two-player split screens fill the wide picture (rt64-splitscreen-widescreen.patch, src/hud_anchor.cpp); key split wide|original
     float aspect_ratio() const;       // target aspect, 0 = original (no widening) or expand (window)
     bool widescreen() const { return aspect != "original"; }
 };

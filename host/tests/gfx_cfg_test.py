@@ -8,7 +8,9 @@ Checks, each in a fresh temp config dir:
      keeps its other values, and is stamped cfg_rev=2;
   3. after that, hud=original is a choice and stays (saved by the menu / --hud original): not migrated again;
   4. a stamped file with hud=16:9 stays; an old file with hud=16:9 stays too (only the old default moves);
-  5. --hud original for one run is saved back with cfg_rev (so it sticks next run), and --hud original / --aspect original never touch the other keys.
+  5. --hud original for one run is saved back with cfg_rev (so it sticks next run), and --hud original / --aspect original never touch the other keys;
+  6. split (two-player split screen in widescreen): a fresh dir and a file without the key get split=wide (the default); --split original
+     is saved and kept, the other keys untouched; a bad value (also the old 1|0 form) is ignored with a message.
 """
 import pathlib, subprocess, sys, tempfile
 
@@ -93,6 +95,20 @@ with tempfile.TemporaryDirectory(prefix="thps-gfx-") as tmp:
     check(value(d, "hud") in (None, "expand"), "file without a hud line: no hud=original appears")
     rc, out = run(d, "--aspect", "original")
     check(value(d, "hud") in (None, "expand") and value(d, "aspect") == "original", "--aspect original: hud setting not changed (4:3 never moves the HUD by itself)")
+
+    d = tmp / "split"; d.mkdir()
+    run(d)
+    check(value(d, "split") == "wide", "fresh dir: split=wide (the default)")
+    rc, out = run(d, "--split", "original")
+    check(value(d, "split") == "original" and value(d, "hud") == "expand", "--split original: saved, the other keys kept")
+    rc, out = run(d)
+    check(value(d, "split") == "original", "split=original stays on the next start")
+    (d / "graphics.cfg").write_text((d / "graphics.cfg").read_text().replace("split=original", "split=0"))
+    rc, out = run(d)
+    check("ignoring split=0" in out, "split=0: ignored with a message (the default applies)")
+    d = tmp / "nosplit"; d.mkdir(); (d / "graphics.cfg").write_text("cfg_rev=2\n" + OLD % "16:9")
+    rc, out = run(d, "--msaa", "4")
+    check(value(d, "split") == "wide", "file without a split line: wide")
 
 print("\n%s" % ("ALL PASS" if not fails else "%d FAILED" % len(fails)))
 sys.exit(1 if fails else 0)
