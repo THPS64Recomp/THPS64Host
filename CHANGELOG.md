@@ -39,6 +39,17 @@ release, the release lists it under a **Games must** heading.
   player 1. The choice lasts until you quit.
 - Tests: `menu-controls`, `menu-controls-reload` and `menu-ports` sessions (virtual pads), the `ui_nav`, `ui_status` and
   `file_lacks` steps, and `--control "ports [swap | assign N P]"`.
+- Native `memset` and `memcpy` for the games' C library (`thps_memset` / `thps_memcpy`, hooked by name), byte-for-byte
+  the same as the MIPS loops. They halve the game-thread stall at a level start. A game uses them by adding the
+  `memset_recomp` and `memcpy_recomp` hooks to its hooks file.
+- `ftime` trace spans (ERZ, DMA, the mem hooks, `send_dl`, the audio task, RT64's workload thread) in `ftime stop FILE`,
+  the test steps `sample`, `sample_wait` and `ftime_max`, and `tests/load_freeze.py` (sessions `lf-probe`, `lf-check`).
+
+### Changed
+- The ERZ (RNC) decoder is about twice as fast (a lookup table for the Huffman codes; CRCs checked only in verbose
+  mode). Its output is unchanged.
+- The game library ABI is now 4 (the import table gains `thps_memset` and `thps_memcpy`). A library built by an
+  earlier release is rebuilt once at the next start.
 
 ### Fixed
 - THPS2/3: the east-button split (flip while skating, back in menus) turned off as soon as `controls.cfg` stopped

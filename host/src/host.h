@@ -1,6 +1,7 @@
 // Shared state of the THPS recomp hosts (no game data in here).
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -28,6 +29,7 @@ struct Stats {
     std::atomic<uint64_t> raw_dmas{0};
     std::atomic<uint64_t> erz_ns{0}, erz_max_ns{0}, raw_dma_ns{0};   // time the game thread spent in the ERZ unpack hook / raw ROM DMA copies (ftime)
     std::atomic<uint64_t> raw_dma_bytes{0};
+    std::atomic<uint64_t> mem_bytes{0};       // bytes set / copied by the native memset / memcpy hooks (hooks.cpp)
     std::atomic<uint64_t> overlay_loads{0};   // front-end overlays mapped (games with overlays: hooks.cpp)
     std::atomic<uint64_t> pio_tail_fixes{0};  // chunk tails completed from the ROM (hooks.cpp)
     std::atomic<uint64_t> input_polls{0};
@@ -328,5 +330,10 @@ extern std::string edges_dump_dir;   // set before edges_frames_left: also save 
 extern std::atomic<int> dump_next_tasks;
 extern std::filesystem::path ctl_dump_dir;
 void control_reply(const std::string& s);
+
+// Load-freeze tracing (src/frametime.cpp): while `ftime start` runs, a span (name, start, duration) per call site is kept for the
+// `ftime stop FILE` CSV (`span,NAME,START_S,DUR_MS` rows): erz / dma (game thread), send_dl (gfx thread), update_screen (VI thread),
+// audio (RSP audio task). One relaxed load when ftime is off. `name` must be a string literal.
+void ftime_span(const char* name, std::chrono::steady_clock::time_point t0);
 
 }  // namespace thps

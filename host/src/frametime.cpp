@@ -16,6 +16,7 @@
 #include "hle/rt64_application.h"
 #include "hle/rt64_present_queue.h"
 #include "render/rt64_raster_shader_cache.h"
+#include "hle/rt64_hfr_stats.h"
 
 #include "hfr.h"
 #include "host.h"
@@ -31,12 +32,16 @@ std::vector<double> g_composited, g_presented, g_game, g_erz, g_dma;   // second
 Clock::time_point g_t0;
 thps::IdsTiming g_ids0;
 double g_load0 = 0;
-uint64_t g_erz_ns0 = 0, g_dma_ns0 = 0, g_erz_n0 = 0;
+uint64_t g_erz_ns0 = 0, g_dma_ns0 = 0, g_erz_n0 = 0, g_mem0 = 0;
+struct Span { const char* name; double start, ms; };
+std::mutex g_span_mutex;
+std::vector<Span> g_spans;   // thps::ftime_span() while ftime runs (capped: a forgotten `ftime start` must not grow without bound)
 
 void sample() {
     RT64::Application* app = thps::hfr_app();
     uint64_t c = app ? app->presentQueue->presentedFrameCount.load() : 0, w = app ? app->presentQueue->windowPresentCount.load() : 0, g = thps::stats.gfx_tasks.load();
     uint64_t e = thps::stats.erz_unpacks.load(), d = thps::stats.raw_dmas.load();
+    uint64_t wl = RT64::hfrStats.workloads.load(), wus = RT64::hfrStats.renderMicros.load(), drop = RT64::hfrStats.displayFramesDropped.load();
     while (g_run.load()) {
         std::this_thread::sleep_for(std::chrono::microseconds(200));
         const double t = std::chrono::duration<double>(Clock::now() - g_t0).count();
@@ -49,6 +54,16 @@ void sample() {
         if (e2 != e) g_erz.push_back(t);
         if (d2 != d) g_dma.push_back(t);
         c = c2, w = w2, g = g2, e = e2, d = d2;
+        // RT64's workload thread (rt64-hfr patch counters): a finished workload (game frame rendered, its interpolated frames included)
+        // becomes a span "workload" ending now, as long as its render time; dropped interpolated frames are counted on it.
+        const uint64_t wl2 = RT64::hfrStats.workloads.load();
+        if (wl2 != wl) {
+            const uint64_t wus2 = RT64::hfrStats.renderMicros.load(), drop2 = RT64::hfrStats.displayFramesDropped.load();
+            const double ms = double(wus2 - wus) / 1000.0 / double(wl2 - wl);
+            std::lock_guard sl{g_span_mutex};
+            for (uint64_t k = wl; k < wl2; k++) g_spans.push_back({drop2 != drop ? "workload_dropped" : "workload", t - ms / 1000.0 * double(wl2 - k), ms});
+            wl = wl2, wus = wus2, drop = drop2;
+        }
     }
 }
 
@@ -82,6 +97,14 @@ std::string histogram(const char* name, const std::vector<double>& ts) {
 
 namespace thps {
 
+void ftime_span(const char* name, std::chrono::steady_clock::time_point t0) {
+    if (!g_run.load(std::memory_order_relaxed)) return;
+    const auto now = Clock::now();
+    const Span sp{name, std::chrono::duration<double>(t0 - g_t0).count(), std::chrono::duration<double, std::milli>(now - t0).count()};
+    std::lock_guard lock{g_span_mutex};
+    if (g_spans.size() < 2000000) g_spans.push_back(sp);
+}
+
 bool frametime_control(const std::string& cmd, std::istringstream& in) {
     if (cmd != "ftime") return false;
     std::string sub;
@@ -90,8 +113,9 @@ bool frametime_control(const std::string& cmd, std::istringstream& in) {
     if (sub == "start") {
         if (g_run.exchange(true)) { reply("err ftime already running"); return true; }
         { std::lock_guard lock{g_mutex}; g_composited.clear(); g_presented.clear(); g_game.clear(); g_erz.clear(); g_dma.clear(); }
+        { std::lock_guard lock{g_span_mutex}; g_spans.clear(); }
         g_ids0 = ids_timing();
-        g_erz_ns0 = thps::stats.erz_ns.load(), g_dma_ns0 = thps::stats.raw_dma_ns.load(), g_erz_n0 = thps::stats.erz_unpacks.load();
+        g_erz_ns0 = thps::stats.erz_ns.load(), g_dma_ns0 = thps::stats.raw_dma_ns.load(), g_erz_n0 = thps::stats.erz_unpacks.load(), g_mem0 = thps::stats.mem_bytes.load();
         thps::stats.erz_max_ns = 0;
         g_t0 = Clock::now();
         g_thread = std::thread(sample);
@@ -105,6 +129,8 @@ bool frametime_control(const std::string& cmd, std::istringstream& in) {
         const IdsTiming t = ids_timing();
         std::vector<double> c, p, g, erz, dma;
         { std::lock_guard lock{g_mutex}; c = g_composited; p = g_presented; g = g_game; erz = g_erz; dma = g_dma; }
+        std::vector<Span> spans;
+        { std::lock_guard lock{g_span_mutex}; spans.swap(g_spans); }
         if (!file.empty()) {
             if (FILE* f = std::fopen(file.c_str(), "w")) {
                 std::fputs("kind,seconds\n", f);
@@ -113,6 +139,7 @@ bool frametime_control(const std::string& cmd, std::istringstream& in) {
                 for (double x : g) std::fprintf(f, "game,%.6f\n", x);
                 for (double x : erz) std::fprintf(f, "erz,%.6f\n", x);
                 for (double x : dma) std::fprintf(f, "dma,%.6f\n", x);
+                for (const Span& sp : spans) std::fprintf(f, "span,%s,%.6f,%.3f\n", sp.name, sp.start, sp.ms);
                 std::fclose(f);
             }
         }
@@ -125,8 +152,9 @@ bool frametime_control(const std::string& cmd, std::istringstream& in) {
         std::snprintf(b, sizeof b, " ids_tasks=%" PRIu64 " ids_walk_us_avg=%.1f ids_walk_us_max=%.1f ids_cpu_us_avg=%.1f ids_cpu_us_max=%.1f ids_hook_us_avg=%.1f ids_budget_clock=%s", tasks, tasks ? double(t.walk_ns - g_ids0.walk_ns) / 1000.0 / double(tasks) : 0.0,
                       double(t.walk_max_ns) / 1000.0, tasks ? double(t.cpu_ns - g_ids0.cpu_ns) / 1000.0 / double(tasks) : 0.0, double(t.cpu_max_ns) / 1000.0, tasks ? double(t.hook_ns - g_ids0.hook_ns) / 1000.0 / double(tasks) : 0.0, ids_budget_clock());
         out += b;
-        std::snprintf(b, sizeof b, " erz_n=%" PRIu64 " erz_ms=%.1f erz_ms_max=%.2f dma_ms=%.1f", thps::stats.erz_unpacks.load() - g_erz_n0, double(thps::stats.erz_ns.load() - g_erz_ns0) / 1e6,
-                      double(thps::stats.erz_max_ns.load()) / 1e6, double(thps::stats.raw_dma_ns.load() - g_dma_ns0) / 1e6);
+        std::snprintf(b, sizeof b, " erz_n=%" PRIu64 " erz_ms=%.1f erz_ms_max=%.2f dma_ms=%.1f mem_kb=%" PRIu64, thps::stats.erz_unpacks.load() - g_erz_n0, double(thps::stats.erz_ns.load() - g_erz_ns0) / 1e6,
+                      double(thps::stats.erz_max_ns.load()) / 1e6, double(thps::stats.raw_dma_ns.load() - g_dma_ns0) / 1e6,
+                      (thps::stats.mem_bytes.load() - g_mem0) / 1024);
         reply(out + b);
     } else if (sub == "shaders") {
         // RT64's specialised-shader cache (read only; a soak run polls it to see when new shaders appear): `submitted` = distinct shaders RT64 has

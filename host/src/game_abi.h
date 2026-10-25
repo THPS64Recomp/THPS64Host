@@ -20,7 +20,8 @@ extern "C" {
 // Bump when ThpsHostApi, ThpsGameInfo or game_imports.def change. A library built for another ABI is rebuilt.
 // 2: ThpsGameInfo carries the class's front-end overlay table (THPS2/3: built from the user's ROM at first run).
 // 3: game_imports.def gains thps_music_load_song (src/music.cpp).
-#define THPS_GAME_ABI 3
+// 4: game_imports.def gains thps_memset and thps_memcpy (src/hooks.cpp).
+#define THPS_GAME_ABI 4
 
 struct ThpsHostApi {
     uint32_t abi;           // THPS_GAME_ABI

@@ -144,7 +144,7 @@ Control commands (`--control`, one per line, reply `[ctl] ok ...`):
 | `idsstat N [FILE]` | pairing statistics over N sampled matched frames: all / moving transforms paired, worst unpaired per frame, camera paired |
 | `idsdump FILE [1]` | RT64's verdict per transform joined with the walk (matrix, translation, vertices, triangles, state hash, parent list, matrix hash) of the same task; `1` also dumps the task before |
 | `idscalls FILE [1]` | the same plus RT64's call and candidate tables (scenes, calls with hash and triangle counts, transform candidates, per-projection `mapped`). Needs an RT64 built with `HFR_STATS_HAS_CALLS` (diagnostic patch kept in the clone used for this work, not part of the repo's patches) |
-| `ftime start` / `ftime stop [FILE]` | (FILE: every timestamp as CSV `kind,seconds`) frame-time statistics between the two (presented / composited / game frames: fps, p50 / p95 / p99 / max interval, frames over 20 ms / 40 ms) and the cost of the ID walk + tracker and hook over the window |
+| `ftime start` / `ftime stop [FILE]` | (FILE: every timestamp as CSV `kind,seconds`, plus `span,NAME,START,MS` rows: erz, dma, memset/memcpy of 4 KiB and up, send_dl, update_screen, audio, RT64 workload; sessions in `tests/load_freeze.py`) frame-time statistics between the two (presented / composited / game frames: fps, p50 / p95 / p99 / max interval, frames over 20 ms / 40 ms) and the cost of the ID walk + tracker and hook over the window |
 
 Flags: `--interp-ids on|off`, `--ids-max-step N`. Test sessions (`tools/test.sh --session NAME`; THPS1/2: opt-in, THPS3: debug sessions):
 

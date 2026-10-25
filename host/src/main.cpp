@@ -330,7 +330,9 @@ void update_gfx(void*) {
 // build/gen/rsp/n_aspMain.cpp). --null-audio completes audio tasks without running them.
 RspExitReason null_audio_ucode(uint8_t*, uint32_t) { return RspExitReason::Broke; }
 RspExitReason audio_ucode(uint8_t* rdram, uint32_t ucode_addr) {
+    const auto t0 = std::chrono::steady_clock::now();
     RspExitReason r = n_aspMain(rdram, ucode_addr);
+    thps::ftime_span("audio", t0);
     if (r != RspExitReason::Broke && thps::stats.audio_ucode_errors.fetch_add(1) < 5) {
         std::fprintf(stderr, "[thps] n_aspMain exited with reason %d\n", int(r));
     }

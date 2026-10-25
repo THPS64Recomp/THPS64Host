@@ -2,6 +2,7 @@
 // [[patches.hook]] text in config/<game>.hooks.toml.
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
@@ -110,9 +111,11 @@ namespace {
 struct HookTimer {   // adds the lifetime of the scope to a counter (and keeps the longest)
     std::atomic<uint64_t>& total;
     std::atomic<uint64_t>* longest;
+    const char* span;   // ftime trace name (src/frametime.cpp)
     std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
-    HookTimer(std::atomic<uint64_t>& t, std::atomic<uint64_t>* m = nullptr) : total(t), longest(m) {}
+    HookTimer(std::atomic<uint64_t>& t, std::atomic<uint64_t>* m, const char* s) : total(t), longest(m), span(s) {}
     ~HookTimer() {
+        thps::ftime_span(span, t0);
         uint64_t ns = uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count());
         total += ns;
         if (longest) {
@@ -124,7 +127,7 @@ struct HookTimer {   // adds the lifetime of the scope to a counter (and keeps t
 }  // namespace
 
 extern "C" void thps_erz_unpack(uint8_t* rdram, recomp_context* ctx, int method) {
-    HookTimer timer(thps::stats.erz_ns, &thps::stats.erz_max_ns);
+    HookTimer timer(thps::stats.erz_ns, &thps::stats.erz_max_ns, "erz");
     gpr src = ctx->r4, dst = ctx->r5;
     // Header (18 bytes) + packed size from the header itself.
     uint8_t hdr[18];
@@ -155,7 +158,7 @@ extern "C" void thps_erz_unpack(uint8_t* rdram, recomp_context* ctx, int method)
     std::vector<uint8_t> out;
     thps::ErzInfo info;
     std::string err;
-    bool ok = thps::erz_decompress(in.data(), in.size(), out, info, err);
+    bool ok = thps::erz_decompress(in.data(), in.size(), out, info, err, thps::verbose());   // CRCs: only reported in verbose mode
     thps::stats.erz_unpacks++;
     if (!ok || info.method != method) {
         std::fprintf(stderr, "[thps] ERZ unpack at 0x%08X (method %d, called as %d) -> 0x%08X failed: %s\n",
@@ -171,6 +174,60 @@ extern "C" void thps_erz_unpack(uint8_t* rdram, recomp_context* ctx, int method)
     if (thps::verbose()) std::printf("[thps] ERZ m%d 0x%08X -> 0x%08X usize 0x%X\n", method, uint32_t(src), uint32_t(dst), info.usize);
     // The handwritten decoders write the whole decoded stream (incl. any overrun of the last block).
     for (size_t i = 0; i < out.size(); i++) MEM_B(i, dst) = int8_t(out[i]);
+}
+
+// The games' libc memset (0x80 bytes of MIPS: a doubleword-store loop when the address and length are 8-aligned, else a byte loop)
+// and memcpy (a forward byte loop), run natively: the level load spends ~50 ms in them (Heap_Free clears every freed block, the
+// loaders copy whole files), and the recompiled byte loops run ~1 ns per byte. Same bytes written, same return value (v0 = dst);
+// the other registers they clobber are caller-saved. Guest byte A lives at host rdram + ((A ^ 3) - KSEG0), so a run of whole
+// words is contiguous on the host in the same order: words go through std::memset / std::memmove, the unaligned ends byte by byte.
+// Returns 0 (run the original) for a range outside KSEG0 RDRAM. (The level-start freeze, v0.2.)
+namespace {
+constexpr uint64_t kKseg0 = 0xFFFFFFFF80000000ull;
+bool in_rdram(gpr a, uint32_t n) {
+    const uint32_t lo = uint32_t(a);
+    return lo >= 0x80000000u && uint64_t(lo) + n <= 0x80800000ull && int64_t(a) == int64_t(int32_t(lo));
+}
+}  // namespace
+
+extern "C" int thps_memset(uint8_t* rdram, recomp_context* ctx) {
+    const gpr dst = ctx->r4;
+    const uint8_t c = uint8_t(ctx->r5);
+    uint32_t n = uint32_t(ctx->r6);
+    if (!in_rdram(dst, n)) return 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    gpr a = dst;
+    for (; n && (a & 3); n--, a++) MEM_B(0, a) = int8_t(c);
+    const uint32_t words = n & ~3u;
+    std::memset(rdram + (a - kKseg0), c, words);
+    a += words, n -= words;
+    for (; n; n--, a++) MEM_B(0, a) = int8_t(c);
+    ctx->r2 = dst;
+    thps::stats.mem_bytes += uint32_t(ctx->r6);
+    if (uint32_t(ctx->r6) >= 4096) thps::ftime_span("memset", t0);
+    return 1;
+}
+
+extern "C" int thps_memcpy(uint8_t* rdram, recomp_context* ctx) {
+    const gpr dst = ctx->r4, src = ctx->r5;
+    uint32_t n = uint32_t(ctx->r6);
+    if (!in_rdram(dst, n) || !in_rdram(src, n)) return 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    const uint32_t d32 = uint32_t(dst), s32 = uint32_t(src);
+    gpr a = dst, b = src;
+    // A forward byte copy onto a later part of its own source repeats a pattern: memmove would not, so that case stays byte by byte.
+    const bool smear = d32 > s32 && d32 < s32 + n;
+    if (!smear && ((d32 ^ s32) & 3) == 0) {
+        for (; n && (a & 3); n--, a++, b++) MEM_B(0, a) = MEM_B(0, b);
+        const uint32_t words = n & ~3u;
+        std::memmove(rdram + (a - kKseg0), rdram + (b - kKseg0), words);
+        a += words, b += words, n -= words;
+    }
+    for (; n; n--, a++, b++) MEM_B(0, a) = MEM_B(0, b);
+    ctx->r2 = dst;
+    thps::stats.mem_bytes += uint32_t(ctx->r6);
+    if (uint32_t(ctx->r6) >= 4096) thps::ftime_span("memcpy", t0);
+    return 1;
 }
 
 extern "C" void thps_set_event_mesg(uint8_t* rdram, recomp_context* ctx) {
@@ -199,7 +256,7 @@ extern "C" void thps_pi_raw_start_dma(uint8_t* rdram, recomp_context* ctx) {
         std::fprintf(stderr, "[thps] osPiRawStartDma write (dir %u) to 0x%08X unsupported\n", direction, phys);
     } else {
         {
-            HookTimer timer(thps::stats.raw_dma_ns);
+            HookTimer timer(thps::stats.raw_dma_ns, nullptr, "dma");
             rom_to_rdram(rdram, dram, phys, size);
         }
         if (thps::game::has_overlays && phys >= recomp::rom_base + overlay_rom_start()) overlay_dma_seen(phys - recomp::rom_base, uint32_t(dram));
