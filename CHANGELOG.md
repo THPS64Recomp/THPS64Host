@@ -7,6 +7,10 @@ release, the release lists it under a **Games must** heading.
 
 ## [Unreleased]
 
+### Added
+- Tests: `present_cmp`, a step that compares two screenshots taken in the same test. It can check the whole picture or
+  only the widescreen side bands, and it can ignore spots that animate on their own.
+
 ## [0.1.0] - 2026-10-18
 
 The first release, used by THPS1 64: Recompiled v0.1.0 and the THPS2 and THPS3 v0.1.0-preview releases.

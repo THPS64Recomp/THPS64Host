@@ -922,6 +922,38 @@ class Session:
             if not p.exists() or not re.search(st[2], p.read_text()):
                 raise StepFail(f"{p.name} has no line matching /{st[2]}/")
             self.notes.append(f"{st[1]}: /{st[2]}/ found")
+        elif kind == "present_cmp":
+            # ("present_cmp", NAME_A, NAME_B, MIN_FRAC, MAX_FRAC[, "sides"][, "mask:NAME_C"]): two kept present captures (keep_present) of a
+            # paused frame differ in MIN_FRAC .. MAX_FRAC of their pixels (sum of |RGB| differences > 24). "sides": only the bands outside the
+            # central 4:3 area. "mask:NAME_C": skip the pixels where A and C differ, i.e. what moves on its own (animated textures keep
+            # running in a paused frame); C is a second capture of A's state. A/B checks on one frame: a switch that must change nothing
+            # (MAX 0), or must change something (MIN > 0).
+            _, na, nb, lo, hi, *opt = st
+            sides = "sides" in opt
+            nc = next((o[5:] for o in opt if o.startswith("mask:")), None)
+            a, b = H.read_png(self.out / f"{na}.png"), H.read_png(self.out / f"{nb}.png")
+            c = H.read_png(self.out / f"{nc}.png") if nc else None
+            for o, nm in ((b, nb), (c, nc)):
+                if o is not None and (a.w, a.h) != (o.w, o.h):
+                    raise StepFail(f"{na}.png {a.w}x{a.h} vs {nm}.png {o.w}x{o.h}")
+            core = a.h * 4 // 3
+            x0 = (a.w - core) // 2
+            xs = [x for x in range(0, a.w, 2) if not sides or x < x0 or x >= x0 + core]
+            n = d = masked = 0
+            for y in range(0, a.h, 2):
+                for x in xs:
+                    pa = a.px(x, y)
+                    if c is not None and sum(abs(i - j) for i, j in zip(pa, c.px(x, y))) > 24:
+                        masked += 1
+                        continue
+                    n += 1
+                    if sum(abs(i - j) for i, j in zip(pa, b.px(x, y))) > 24:
+                        d += 1
+            frac = d / max(n, 1)
+            self.notes.append(f"{na} vs {nb}{' (side bands)' if sides else ''}: {frac:.3%} of pixels differ"
+                              + (f" ({masked} moving pixels masked by {nc})" if c is not None else ""))
+            if not lo <= frac <= hi:
+                raise StepFail(f"{na}.png vs {nb}.png: {frac:.3%} of pixels differ (expected {lo:.3%} .. {hi:.3%})")
         elif kind == "keep_present":
             # Copy the newest present capture (session present_every) to <out>/<name>.png (evidence).
             time.sleep(1.0)
