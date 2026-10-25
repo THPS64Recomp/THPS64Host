@@ -11,6 +11,8 @@ Checks, each in a fresh temp config dir:
   5. --hud original for one run is saved back with cfg_rev (so it sticks next run), and --hud original / --aspect original never touch the other keys;
   6. split (two-player split screen in widescreen): a fresh dir and a file without the key get split=wide (the default); --split original
      is saved and kept, the other keys untouched; a bad value (also the old 1|0 form) is ignored with a message.
+  7. border (src/border_crop.cpp): a fresh dir and a file without the key get border=original (the default); --border fill is saved; a bad value
+     (also `crop`, the value's name before v0.2 was released: no shim) is ignored with a message.
 """
 import pathlib, subprocess, sys, tempfile
 
@@ -109,6 +111,20 @@ with tempfile.TemporaryDirectory(prefix="thps-gfx-") as tmp:
     d = tmp / "nosplit"; d.mkdir(); (d / "graphics.cfg").write_text("cfg_rev=2\n" + OLD % "16:9")
     rc, out = run(d, "--msaa", "4")
     check(value(d, "split") == "wide", "file without a split line: wide")
+    d = tmp / "border"; d.mkdir()
+    run(d)
+    check(value(d, "border") == "original", "fresh dir: border=original (the default)")
+    rc, out = run(d, "--border", "fill")
+    check(value(d, "border") == "fill" and value(d, "hud") == "expand", "--border fill: saved, the other keys kept")
+    (d / "graphics.cfg").write_text((d / "graphics.cfg").read_text().replace("border=fill", "border=sideways"))
+    rc, out = run(d)
+    check("ignoring border=sideways" in out, "border=sideways: ignored (the default applies)")
+    (d / "graphics.cfg").write_text(re.sub(r"(?m)^border=.*\n", "", (d / "graphics.cfg").read_text()) + "border=crop\n")
+    rc, out = run(d)
+    check("ignoring border=crop" in out and value(d, "border") in (None, "original"), "border=crop (the unreleased old name): ignored with a message, no shim")
+    d = tmp / "noborder"; d.mkdir(); (d / "graphics.cfg").write_text("cfg_rev=2\n" + OLD % "16:9")
+    rc, out = run(d)
+    check(value(d, "border") is None or value(d, "border") == "original", "file without a border line: original")
 
 print("\n%s" % ("ALL PASS" if not fails else "%d FAILED" % len(fails)))
 sys.exit(1 if fails else 0)

@@ -21,6 +21,12 @@ release, the release lists it under a **Games must** heading.
   prints the counters (`kept`: split-screen frames left at the game's own HUD placement; `bands`: fills kept out of the side
   bands). Test step `present_bands_clear`
   and the shared session `two-players-169-splitorig` (`tests/hud_sessions.py`).
+- Graphics setting `border` (`original` | `fill`, default `original`), the menu row Graphics > Picture Border and `--border`:
+  `fill` removes the thin black frame around the 3D picture (the game's 8 px inset) by widening the inset scissor and clears in
+  the display list (`src/border_crop.cpp`), in a two-player split screen each view's too (`crop_halves`); no zoom, no RT64
+  change. The picture fills the frame the game left black: nothing is cut off. The control command `border original|fill`
+  switches it for one run. Test step `border` and the shared `tests/crop_sessions.py` (`crop_two_players` for the split
+  screen).
 
 ## [0.1.0] - 2026-10-18
 

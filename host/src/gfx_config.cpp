@@ -15,6 +15,7 @@
 //   refresh   original | display | N             (frame interpolation target; src/interpolation.cpp)
 //   hud       original | 16:9 | expand            (HUD placement in widescreen; src/hud_anchor.cpp; default kDefaultHud = expand, host.h)
 //   split     wide | original                    (two-player split screens fill the wide picture; original = both views in the 4:3 area; default wide)
+//   border    original | fill                     (the game's 8 px frame around the 3D picture; src/border_crop.cpp; default original)
 //   cfg_rev   N                                   (written by the host, not a setting: which defaults the file was saved under; see gfx_config_load)
 #include <cstdio>
 #include <cstdlib>
@@ -65,6 +66,7 @@ static bool parse_wxh(const std::string& v, int& w, int& h) {
 static void publish() {
     target_aspect = gfx.aspect == "expand" ? -1.0f : gfx.aspect_ratio();
     hud_set_mode(gfx.hud != "original" && gfx.aspect != "original", gfx.aspect != "original");
+    border_crop_set(gfx.border == "fill");
 }
 
 bool gfx_config_set(const std::string& key, const std::string& value) {
@@ -102,6 +104,9 @@ bool gfx_config_set(const std::string& key, const std::string& value) {
     } else if (key == "split") {
         if (value != "wide" && value != "original") return false;
         gfx.split_wide = value == "wide";
+    } else if (key == "border") {
+        if (value != "original" && value != "fill") return false;   // `crop` was its name before v0.2 shipped: no shim
+        gfx.border = value;
     } else if (key == "fullscreen") {
         gfx.fullscreen = value == "1";
     } else {
@@ -198,6 +203,7 @@ void gfx_config_save(const std::filesystem::path& file) {
         out << "fullscreen=" << (gfx.fullscreen ? 1 : 0) << "\n";
         if (hud_supported()) out << "hud=" << gfx.hud << "\n";
         out << "split=" << (gfx.split_wide ? "wide" : "original") << "\n";
+        out << "border=" << gfx.border << "\n";
         out << "refresh=" << (gfx.refresh < 0 ? std::string("display") : gfx.refresh == 0 ? std::string("original") : std::to_string(gfx.refresh)) << "\n";
     }
     std::error_code ec;
@@ -205,10 +211,10 @@ void gfx_config_save(const std::filesystem::path& file) {
 }
 
 std::string gfx_describe() {
-    char buf[280];
-    std::snprintf(buf, sizeof buf, "aspect=%s window=%dx%d%s res_scale=%d downsample=%d msaa=%d fullscreen=%d refresh=%d hpfb=%d hud=%s split=%s",
+    char buf[320];
+    std::snprintf(buf, sizeof buf, "aspect=%s window=%dx%d%s res_scale=%d downsample=%d msaa=%d fullscreen=%d refresh=%d hpfb=%d hud=%s split=%s border=%s",
                   gfx.aspect.c_str(), gfx.window_w, gfx.window_h, gfx.window_auto ? "(auto)" : "", gfx.res_scale, gfx.downsample, gfx.msaa, int(gfx.fullscreen),
-                  gfx.refresh, gfx.hpfb, gfx.hud.c_str(), gfx.split_wide ? "wide" : "original");
+                  gfx.refresh, gfx.hpfb, gfx.hud.c_str(), gfx.split_wide ? "wide" : "original", gfx.border.c_str());
     return buf;
 }
 

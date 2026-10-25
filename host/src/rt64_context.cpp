@@ -517,6 +517,7 @@ public:
         auto t0 = std::chrono::steady_clock::now();
         uint64_t n = thps::stats.gfx_tasks.fetch_add(1);
         thps::fix_display_list(app->core.RDRAM, task->t.data_ptr);
+        thps::crop_display_list(app->core.RDRAM, task->t.data_ptr);   // graphics setting border=fill (src/border_crop.cpp)
         thps::inspect_display_list(app->core.RDRAM, uint32_t(n), task->t.ucode, task->t.data_ptr, task->t.data_size);
         app->state->rsp->reset();
         app->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);

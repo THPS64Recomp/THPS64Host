@@ -512,6 +512,7 @@ int main(int argc_in, char** argv_in) {
         else if (arg("--refresh")) gfx_overrides.emplace_back("refresh", argv[++i]);
         else if (arg("--hud")) gfx_overrides.emplace_back("hud", argv[++i]);
         else if (arg("--split")) gfx_overrides.emplace_back("split", argv[++i]);
+        else if (arg("--border")) gfx_overrides.emplace_back("border", argv[++i]);
         else if (arg("--controls-preset")) controls_preset = argv[++i];
         else if (flag("--fullscreen")) gfx_overrides.emplace_back("fullscreen", "1");
         else if (flag("--windowed")) gfx_overrides.emplace_back("fullscreen", "0");

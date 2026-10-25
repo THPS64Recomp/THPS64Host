@@ -400,6 +400,7 @@ add_executable(${THPS_EXE}
     ${THPS_SHARED_DIR}/src/erz.cpp
     ${THPS_SHARED_DIR}/src/rt64_context.cpp
     ${THPS_SHARED_DIR}/src/dl_inspect.cpp
+    ${THPS_SHARED_DIR}/src/border_crop.cpp
     ${THPS_SHARED_DIR}/src/dl_fixes.cpp
     ${THPS_SHARED_DIR}/src/ultra_stubs.cpp
     ${THPS_SHARED_DIR}/src/input.cpp

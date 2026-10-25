@@ -115,6 +115,7 @@ struct GfxConfig {
     int hpfb = -1;                    // high-precision framebuffer: -1 auto, 0 off, 1 on
     std::string hud = kDefaultHud;    // HUD placement (src/hud_anchor.cpp): original (centred 4:3) | 16:9 (to the 16:9 edges) | expand (to the window's edges)
     bool split_wide = true;           // two-player split screens fill the wide picture (rt64-splitscreen-widescreen.patch, src/hud_anchor.cpp); key split wide|original
+    std::string border = "original";  // the game's 8 px frame around the 3D picture (src/border_crop.cpp): original | fill (3D fills the frame)
     float aspect_ratio() const;       // target aspect, 0 = original (no widening) or expand (window)
     bool widescreen() const { return aspect != "original"; }
 };
@@ -287,6 +288,12 @@ void dl_canary_begin(uint8_t* rdram, uint32_t data_ptr);
 void dl_canary_end(uint8_t* rdram, uint64_t task_index);
 extern std::atomic<uint64_t> edge_fix_patches;
 extern std::atomic<uint64_t> ring_clear_patches;   // 640x480 frames whose colour buffer got a black clear of its margin ring (dl_fixes.cpp)
+// Border crop (src/border_crop.cpp, graphics setting `border`): with `fill` the 3D frames' 8 px inset scissor and clears are widened to the
+// whole buffer before RT64 reads the task. crop_display_list runs after fix_display_list; border_crop_set is called by gfx_config.
+void border_crop_set(bool on);
+bool border_crop_on();
+void crop_display_list(uint8_t* rdram, uint32_t data_ptr);
+std::string border_crop_report();   // "crop=0|1 tasks=N scissors=N fills=N bands=N" (control "stats")
 extern std::atomic<int> edges_frames_left;
 extern std::string edges_dump_dir;   // set before edges_frames_left: also save the first frames as PNGs here
 // --control "dump N DIR": the display-list inspector dumps the next N gfx tasks into DIR (dl_inspect.cpp).
