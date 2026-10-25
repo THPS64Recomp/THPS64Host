@@ -201,6 +201,34 @@ std::string input_bind(const std::string& args);
 std::string input_set_preset(const std::string& name);   // replaces + saves every binding; "ok ..." or "err ..."
 std::string input_preset_name();                         // CLI build: the controls.cfg preset: "thps-xbox" | "n64" | "custom" (edited); frontend build: ""
 void input_after_settings(const std::filesystem::path& config_dir);  // frontend build: move a stale generated controls.json layout
+// The settings menu's Controls tab (CLI build; any thread): the inputs (controls.cfg lines), their fields per device, rebinding.
+int input_count();
+std::string input_id(int in);                       // controls.cfg name: "a", "c_down", "stick_left" ...
+std::string input_label(int in);                    // the game action: "Ollie (C-down)"
+int input_find(const std::string& id);              // -1 = none
+std::vector<std::string> input_slots(int in, bool keyboard);   // that device's fields, in order ("button:a", "axis:righty+", "key:K")
+std::string input_field_label(const std::string& field);       // "A", "R-stick down", "K"
+uint64_t input_bindings_version();                  // changes whenever a binding does
+struct RebindResult {
+    bool ok = false;
+    std::string reply;     // "ok rebind c_down pad 0 button:y swapped=c_up preset=custom saved=1" | "err ..."
+    std::string message;   // for the menu: "Ollie (C-down): Y (Grind (C-up) is now A)"
+};
+RebindResult input_rebind(int in, bool keyboard, int slot, const std::string& field);   // field "none" clears the slot; saves controls.cfg
+RebindResult input_reset_input(int in);             // one input back to the preset loaded / picked last
+std::vector<std::string> input_default_slots(int in, bool keyboard);   // that input's fields in the preset loaded / picked last (the Controls tab marks the others)
+std::string input_base_preset();                    // the preset loaded / picked last: "thps-xbox" | "n64" (frontend build: "")
+// The Controllers list: open controllers, their player (port) and what they press now. Main thread updates it every frame.
+struct InputPad {
+    int id = -1;           // SDL joystick instance id
+    std::string name;      // SDL's controller name
+    int player = 0;        // 1 | 2 | 0 = no port yet (it takes the first free one when it presses a button)
+    std::string pressed;   // "A + LB", "" = nothing
+};
+std::vector<InputPad> input_pads();
+void input_assign_port(int id, int port);   // port 0 | 1; a controller already on the other port swaps; applied on the main thread
+void input_swap_ports();                    // players 1 and 2 trade controllers (either may be none: keyboard-only player 1)
+std::string input_ports(const std::string& args);   // --control "ports [swap | assign INDEX 1|2]" (main thread)
 
 // Settings (src/settings.cpp in the CLI build: <config>/general.cfg; src/frontend.cpp with
 // THPS_FRONTEND: recompui's General/Graphics/Sound tabs). Command-line flags override.

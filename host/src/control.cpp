@@ -33,6 +33,7 @@
 //   vpad attach|detach|button NAME 0|1|axis NAME V   a virtual SDL game controller (input.cpp); vpad2 ... = a second one
 //   key NAME                     a keyboard tap (SDL key name) through the key latch (input.cpp)
 //   bind INPUT INDEX FIELD      set + save a binding, as the Controls tab does (input.cpp)
+//   ports [swap|assign N P]     the open controllers and their players; swap players 1 / 2; give controller N port P (input.cpp)
 //   loadrom PATH                frontend build: the launcher's Load ROM with PATH as the file picked
 //   edges [N [DIR]]             border-band stability of the next N composited presents (RT64's final
 //                               image, as the window shows it): mean |frame-to-frame difference| of the
@@ -303,7 +304,7 @@ void handle(const std::string& line) {
         char buf[80];
         std::snprintf(buf, sizeof buf, "ok ramsave frame=%" PRIu64 " path=", s.vi_origin_changes.load());
         reply(buf + path);
-    } else if (cmd == "vpad" || cmd == "vpad2" || cmd == "key" || cmd == "bind" || cmd == "preset" || cmd == "loadrom" || cmd == "ui") {
+    } else if (cmd == "vpad" || cmd == "vpad2" || cmd == "key" || cmd == "bind" || cmd == "preset" || cmd == "ports" || cmd == "loadrom" || cmd == "ui") {
         std::lock_guard lock{g_mutex};
         g_main_cmds.push_back(line);
     } else if (cmd == "edges") {
@@ -422,6 +423,10 @@ void thps::control_main_thread() {
 #else
             reply("err loadrom: no launcher in this build");
 #endif
+            continue;
+        }
+        if (cmd == "ports") {
+            reply(thps::input_ports(rest));
             continue;
         }
         reply(cmd == "vpad" ? thps::input_vpad(rest) : cmd == "vpad2" ? thps::input_vpad(rest, 1) : cmd == "key" ? thps::input_key(rest) : cmd == "preset" ? thps::input_set_preset(rest) : thps::input_bind(rest));

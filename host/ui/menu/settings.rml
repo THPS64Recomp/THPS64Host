@@ -6,6 +6,37 @@
     <style>
         body { width: 100%; height: 100%; }
         .menu-title { padding: 18dp 28dp 0dp 28dp; font-size: 22dp; color: #8d8ca0; }
+        /* Controls tab: the Controllers list and the binding rows */
+        .ctl-scroll { overflow-y: auto; }
+        .ctl-panel { height: 100%; }
+        .ctl-panel .config__hz-wrapper { flex: 1 1 0dp; }
+        .ctl-section { width: 100%; }
+        .ctl-pad, .ctl-row { display: flex; flex-direction: row; align-items: center; width: 100%; padding: 2dp 12dp; }
+        .ctl-pad__name { flex: 3 1 0dp; color: #CCCCCC; }
+        .ctl-pad__player { flex: 1.4 1 0dp; color: #F2F2F2; }
+        .ctl-pad__player--none { color: #8d8ca0; }
+        .ctl-pad__pressed { flex: 1.6 1 0dp; color: #8d8ca0; white-space: nowrap; overflow: hidden; }
+        .ctl-pad__pressed--on { color: #52E0A0; }
+        .ctl-btn { display: block; flex: 0 0 auto; margin: 4dp 6dp; padding: 8dp 14dp; border-width: 1.1dp; border-radius: 8dp;
+                   border-color: rgba(185, 125, 242, 204); background-color: rgba(185, 125, 242, 13); color: #CCCCCC; cursor: pointer; }
+        .ctl-btn--wide { flex: 0 0 auto; }
+        .ctl-btn--on { background-color: rgba(185, 125, 242, 128); color: #F2F2F2; }
+        .ctl-btn:focus, .ctl-btn:hover { border-color: #B97DF2; background-color: rgba(185, 125, 242, 76); color: #F2F2F2; }
+        .ctl-row--head { color: #8d8ca0; }
+        .ctl-row__label { flex: 3 1 0dp; color: #CCCCCC; white-space: nowrap; overflow: hidden; }
+        .ctl-row__head { flex: 2 1 0dp; padding-left: 6dp; }
+        .ctl-row__reset-head { flex: 0 0 104dp; }
+        .ctl-slot { display: block; flex: 1 1 0dp; margin: 3dp 6dp; padding: 8dp 6dp; text-align: center; white-space: nowrap; overflow: hidden;
+                    border-width: 1.1dp; border-radius: 8dp; border-color: rgba(190, 184, 219, 26); background-color: rgba(190, 184, 219, 26);
+                    color: #CCCCCC; cursor: pointer; }
+        .ctl-slot:focus, .ctl-slot:hover { border-color: #F2F2F2; background-color: rgba(255, 255, 255, 26); color: #F2F2F2; }
+        /* A slot whose binding differs from the layout's default (src/ui/ui_host.cpp BindRow m0-m3); a capture's colour wins */
+        .ctl-slot--changed { border-color: #F2C14E; color: #F2C14E; }
+        .ctl-slot--changed:focus, .ctl-slot--changed:hover { border-color: #F2C14E; color: #F2C14E; }
+        .ctl-slot--capture, .ctl-slot--capture:focus { border-color: #F86039; color: #F86039; }
+        .ctl-reset { flex: 0 0 92dp; text-align: center; padding: 8dp 4dp; }
+        .ctl-status { flex: 0 0 auto; padding: 10dp 28dp; min-height: 22dp; color: #F2C14E; background-color: rgba(0, 0, 0, 89);
+                      border-bottom-right-radius: 16dp; border-bottom-left-radius: 16dp; }
     </style>
 </head>
 <body class="window">
@@ -49,10 +80,10 @@
                     <div>Controls</div>
                     <div class="tab__indicator"></div>
                 </tab>
-                <panel class="config" data-model="controls_model">
+                <panel class="config ctl-panel" data-model="controls_model">
                     <form class="config__form">
                         <div class="config__hz-wrapper">
-                            <div class="config__wrapper">
+                            <div class="config__wrapper ctl-scroll">
                     <div class="config-option">
                         <label class="config-option__title">Controller Layout</label>
                         <div class="config-option__list">
@@ -60,17 +91,57 @@
                             <label class="config-option__tab-label" id="lbl_cl_thps_xbox" for="cl_thps_xbox">Face buttons (default)</label>
                             <input type="radio" name="preset" data-checked="preset" value="n64" id="cl_n64" />
                             <label class="config-option__tab-label" id="lbl_cl_n64" for="cl_n64">N64 layout (C buttons on right stick)</label>
-                            <div class="config-option__details">Keyboard and controller. Picking a layout replaces every binding.</div>
+                            <div class="config-option__details">Keyboard and controller. Picking a layout resets every binding below to it (a .bak copy of controls.cfg is kept).</div>
                         </div>
                     </div>
                     <div class="config-option" data-if="preset_is_custom">
-                        <p>Your controls.cfg has custom bindings, so neither layout is selected. Picking one replaces them (a .bak copy is kept).</p>
+                        <p>Your bindings are your own (custom), so neither layout is selected. Picking one replaces them.</p>
                     </div>
-                    <div class="config-option">
-                        <p>Keyboard: arrows = stick, Space = A, D = B, I / J / K / L = C buttons, Q / E / S = L / R / Z, Enter = Start. To bind single buttons or keys, edit controls.cfg in {{config_dir}} and restart; in-game rebinding is planned.</p>
+                    <div class="config-option ctl-section">
+                        <label class="config-option__title">Controllers</label>
+                        <div class="ctl-pad" data-for="pad, pi : pads">
+                            <div class="ctl-pad__name">{{pad.name}}</div>
+                            <div class="ctl-pad__player" data-class-ctl-pad__player--none="pad.player == 0">{{pad.player_text}}</div>
+                            <div class="ctl-pad__pressed" data-class-ctl-pad__pressed--on="pad.pressing">{{pad.pressed}}</div>
+                            <button class="ctl-btn nav-all" data-attr-id="'pad' + pi + '_p1'" data-class-ctl-btn--on="pad.player == 1" data-event-click="set_player(pi, 1)">Player 1</button>
+                            <button class="ctl-btn nav-all" data-attr-id="'pad' + pi + '_p2'" data-class-ctl-btn--on="pad.player == 2" data-event-click="set_player(pi, 2)">Player 2</button>
+                        </div>
+                        <div class="ctl-pad" data-if="pads.size == 0">
+                            <div class="ctl-pad__name">No controller connected. Plug one in or pair one at any time.</div>
+                        </div>
+                        <div class="ctl-pad">
+                            <div class="ctl-pad__name">Keyboard</div>
+                            <div class="ctl-pad__player">Player 1 (always)</div>
+                            <div class="ctl-pad__pressed"></div>
+                            <button class="ctl-btn ctl-btn--wide nav-all" id="swap_players" data-event-click="swap_players">Swap players 1 and 2</button>
+                        </div>
+                        <div class="config-option__details">A controller takes the first free player when it presses a button. Use Player 1 / Player 2 to choose instead (the controller there swaps with it). With one controller on Player 2, the keyboard plays player 1 alone. The choice lasts until you quit.</div>
+                    </div>
+                    <div class="config-option ctl-section">
+                        <label class="config-option__title">Bindings</label>
+                        <div class="ctl-row ctl-row--head">
+                            <div class="ctl-row__label">Action (N64 input)</div>
+                            <div class="ctl-row__head">Controller</div>
+                            <div class="ctl-row__head">Keyboard</div>
+                            <div class="ctl-row__reset-head"></div>
+                        </div>
+                        <div class="ctl-row" data-for="row, i : rows">
+                            <div class="ctl-row__label">{{row.label}}</div>
+                            <button class="ctl-slot nav-all" data-attr-id="'bp0_' + row.id" data-class-ctl-slot--capture="row.cap == 1" data-class-ctl-slot--changed="row.m0" data-event-click="rebind(i, 0, 0)">{{row.p0}}</button>
+                            <button class="ctl-slot nav-all" data-attr-id="'bp1_' + row.id" data-class-ctl-slot--capture="row.cap == 2" data-class-ctl-slot--changed="row.m1" data-event-click="rebind(i, 0, 1)">{{row.p1}}</button>
+                            <button class="ctl-slot nav-all" data-attr-id="'bk0_' + row.id" data-class-ctl-slot--capture="row.cap == 3" data-class-ctl-slot--changed="row.m2" data-event-click="rebind(i, 1, 0)">{{row.k0}}</button>
+                            <button class="ctl-slot nav-all" data-attr-id="'bk1_' + row.id" data-class-ctl-slot--capture="row.cap == 4" data-class-ctl-slot--changed="row.m3" data-event-click="rebind(i, 1, 1)">{{row.k1}}</button>
+                            <button class="ctl-btn ctl-reset nav-all" data-attr-id="'brs_' + row.id" data-event-click="reset_row(i)">Default</button>
+                        </div>
+                        <div class="ctl-row">
+                            <div class="ctl-row__label">A yellow slot differs from the layout above.</div>
+                            <button class="ctl-btn nav-all" id="reset_all" data-event-click="reset_all">{{reset_all_label}}</button>
+                        </div>
+                        <div class="config-option__details">Choose a slot, then press the button, trigger or stick direction (controller) or the key (keyboard) for it: Back or Esc cancels, Backspace or Delete empties the slot, and after 5 seconds it gives up. A button another action already uses moves here, and that action gets this slot's old button (a swap). Menu accept / back may share a button with a trick, as the default layout does. Default puts one action back as the layout has it; Reset all puts every action back (it asks first). Saved to controls.cfg in {{config_dir}} at once.</div>
                     </div>
                             </div>
                         </div>
+                        <div class="ctl-status" id="bind_status">{{bind_status}}</div>
                     </form>
                 </panel>
                 <tab class="tab" id="tab_graphics">

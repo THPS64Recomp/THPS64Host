@@ -33,6 +33,7 @@
 #include <fstream>
 #include <mutex>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 #define SDL_MAIN_HANDLED
@@ -185,6 +186,85 @@ std::mutex g_bind_mutex;
 Bindings g_bindings = default_bindings();   // CLI build
 std::filesystem::path g_controls_cfg;
 std::string g_preset = "thps-xbox";          // controls.cfg "preset = ..." line: thps-xbox, n64, or custom (edited)
+Preset g_base = Preset::ThpsXbox;            // what a row's "Default" in the Controls tab resets to: the preset loaded or picked last
+bool g_ui_backup_done = false;               // the first rebind of a session keeps the file it replaces as controls.cfg.bak
+// THPS2/3's split of the east button (input_get): on when some field drives both N64 B and C-right, as thps-xbox's east button does.
+// (It used to follow the preset name, so any edit turned it off, and the east button flipped and grabbed at once.)
+std::atomic<bool> g_pair_split{true};
+std::atomic<uint64_t> g_bind_version{1};     // +1 on every change of the bindings (the Controls tab redraws its rows)
+
+// After any change of g_bindings (g_bind_mutex held).
+void bindings_changed_locked() {
+    bool shared = false;
+    for (const Field& f : g_bindings[B])
+        for (const Field& g : g_bindings[CR]) shared = shared || same_field(f, g);
+    g_pair_split = shared;
+    g_bind_version++;
+}
+
+// The game action of each input, as the Controls tab names it. THPS1 reads N64 A / B in menus only; THPS2/3 also read A as ollie and
+// B as flip while skating (game.toml b_is_flip_in_game).
+const char* input_label_of(int in) {
+    constexpr bool flip = thps::game::b_is_flip_in_game;
+    const bool thps3 = std::string_view(thps::game::short_name) == "THPS3";
+    switch (in) {
+        case A: return flip ? "Ollie + menu accept (N64 A)" : "Menu accept (N64 A)";
+        case B: return flip ? "Flip + menu back (N64 B)" : "Menu back (N64 B)";
+        case Z: return "Z (unused)";
+        case L: return flip ? "Spin left / nollie (L)" : "Spin (L)";
+        case R: return flip ? (thps3 ? "Spin right / switch / revert (R)" : "Spin right / switch (R)") : "Spin (R)";
+        case START: return "Pause (Start)";
+        case CU: return "Grind (C-up)";
+        case CD: return "Ollie (C-down)";
+        case CL: return "Flip trick (C-left)";
+        case CR: return "Grab trick (C-right)";
+        case DU: return "D-pad up";
+        case DD: return "D-pad down";
+        case DL: return "D-pad left";
+        case DR: return "D-pad right";
+        case XNEG: return "Stick left";
+        case XPOS: return "Stick right";
+        case YPOS: return "Stick up";
+        case YNEG: return "Stick down";
+        default: return "?";
+    }
+}
+
+// The menu inputs (N64 A / B: accept and back) may share a button with the play inputs, as the presets do (A = accept + ollie,
+// B = back + grab; THPS1 reads A / B in menus only, THPS2/3 split the east button in input_get). Within either group, a button that
+// one input takes is taken from the other (a swap).
+bool menu_input(int in) { return in == A || in == B; }
+bool may_share(int a, int b) { return menu_input(a) != menu_input(b); }
+
+// A field as the Controls tab shows it: "A", "LB", "RT", "L-stick left", "Space".
+std::string field_label(const Field& f) {
+    switch (f.type) {
+        case Field::Key: {
+            const char* n = SDL_GetScancodeName(SDL_Scancode(f.id));
+            return n && *n ? n : "key " + std::to_string(f.id);
+        }
+        case Field::Button: {
+            static const char* const names[] = {"A", "B", "X", "Y", "Back", "Guide", "Start", "L3", "R3", "LB", "RB", "D-pad up", "D-pad down",
+                                                "D-pad left", "D-pad right", "Share", "Paddle 1", "Paddle 2", "Paddle 3", "Paddle 4", "Touchpad"};
+            if (f.id >= 0 && f.id < int(sizeof names / sizeof *names)) return names[f.id];
+            return "button " + std::to_string(f.id);
+        }
+        case Field::Axis: {
+            const int a = std::abs(f.id) - 1;
+            const bool pos = f.id > 0;
+            switch (a) {
+                case SDL_CONTROLLER_AXIS_LEFTX: return pos ? "L-stick right" : "L-stick left";
+                case SDL_CONTROLLER_AXIS_LEFTY: return pos ? "L-stick down" : "L-stick up";
+                case SDL_CONTROLLER_AXIS_RIGHTX: return pos ? "R-stick right" : "R-stick left";
+                case SDL_CONTROLLER_AXIS_RIGHTY: return pos ? "R-stick down" : "R-stick up";
+                case SDL_CONTROLLER_AXIS_TRIGGERLEFT: return pos ? "LT" : "LT (released)";
+                case SDL_CONTROLLER_AXIS_TRIGGERRIGHT: return pos ? "RT" : "RT (released)";
+                default: return "axis " + std::to_string(f.id);
+            }
+        }
+        default: return "";
+    }
+}
 
 // Copy `path` to `bak` (replacing it) if `path` exists. Returns whether a copy was made.
 bool backup_file(const std::filesystem::path& path, const std::filesystem::path& bak, bool replace) {
@@ -195,7 +275,17 @@ bool backup_file(const std::filesystem::path& path, const std::filesystem::path&
     return !ec;
 }
 
+// Writes g_bindings / g_preset (a copy taken under g_bind_mutex: call it without the lock).
 void write_controls_cfg() {
+    Bindings bindings;
+    std::string preset;
+    Preset base;
+    {
+        std::lock_guard lock{g_bind_mutex};
+        bindings = g_bindings;
+        preset = g_preset;
+        base = g_base;
+    }
     std::filesystem::path tmp = g_controls_cfg;
     tmp += ".tmp";
     {
@@ -205,12 +295,16 @@ void write_controls_cfg() {
                "# leftstick rightstick leftshoulder rightshoulder dpup dpdown dpleft dpright), axis:NAME+ or\n"
                "# axis:NAME- (leftx lefty rightx righty lefttrigger righttrigger), none. a/b/x/y = south/east/west/north.\n"
                "# preset: thps-xbox (tricks on the face buttons, the default), n64 (C buttons on the right stick) or custom.\n"
-               "# Change it with --controls-preset NAME; a file without this line that still has the old generated N64\n"
+               "# base (custom only): the layout the bindings were changed from; Default and Reset all in the Controls tab go back to it.\n"
+               "# Change it in the settings menu (Esc > Controls) or with --controls-preset NAME; a file without this line that still has the old generated N64\n"
                "# layout is moved to thps-xbox once (the old file is kept as controls.cfg.pre-xbox.bak).\n"
-               "preset = " << g_preset << "\n";
+               "preset = " << preset << "\n";
+        // A customised layout keeps the layout it was made from: what the Controls tab's marks, a row's Default and Reset all go back to
+        // (review 2026-10-26, finding 5: without it a restart turned an edited N64 layout's baseline into the face-button one).
+        if (preset == "custom") out << "base = " << preset_name(base) << "\n";
         for (int i = 0; i < IN_COUNT; i++) {
             out << k_in_names[i] << " =";
-            for (size_t j = 0; j < g_bindings[i].size(); j++) out << (j ? ", " : " ") << field_name(g_bindings[i][j]);
+            for (size_t j = 0; j < bindings[i].size(); j++) out << (j ? ", " : " ") << field_name(bindings[i][j]);
             out << "\n";
         }
     }
@@ -259,7 +353,16 @@ void fields_for(int in, std::vector<Field>& out) {
 }
 
 std::mutex g_port_mutex;
-std::vector<SDL_JoystickID> g_port_order;  // controllers holding ports 1-2, in the order they first pressed a button
+// The controllers holding ports 1-2 (-1 = none). A controller takes the first free port when it presses a button; the settings menu's
+// Controllers list can also assign or swap them (g_port_reqs, applied on the main thread).
+std::array<SDL_JoystickID, k_ports> g_ports{-1, -1};
+struct PortReq {
+    enum Op { Assign, Swap } op;
+    SDL_JoystickID id;
+    int port;
+};
+std::vector<PortReq> g_port_reqs;   // g_port_mutex
+std::vector<std::pair<SDL_JoystickID, SDL_GameController*>> g_open;   // main thread: the open controllers (port_controllers)
 
 struct Press {
     double at, dur;
@@ -280,36 +383,70 @@ bool controller_any_button(SDL_GameController* c) {
            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16384;
 }
 
-// Updates the port order; out = the controllers holding ports, in port order. Returns how many
-// hold ports; *connected = how many controllers are open (capped at k_ports).
-int port_controllers(std::array<SDL_GameController*, k_ports>& out, int* connected = nullptr) {
+// Main thread. Updates the ports; out = the controller of each port (nullptr = none). *connected = how many controllers are open
+// (capped at k_ports).
+void port_controllers(std::array<SDL_GameController*, k_ports>& out, int* connected = nullptr) {
     std::lock_guard lock{g_port_mutex};
-    std::vector<std::pair<SDL_JoystickID, SDL_GameController*>> open;
+    g_open.clear();
     int n = SDL_NumJoysticks();
     for (int i = 0; i < n; i++) {
         if (!SDL_IsGameController(i)) continue;
         if (thps::options.no_pads && !SDL_JoystickIsVirtual(i)) continue;  // headless tests: only --control vpad
         SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(i);
         SDL_GameController* c = SDL_GameControllerFromInstanceID(id);
-        if (c) open.emplace_back(id, c);
+        if (c) g_open.emplace_back(id, c);
     }
     auto find_open = [&](SDL_JoystickID id) -> SDL_GameController* {
-        for (auto& [oid, c] : open) if (oid == id) return c;
+        if (id < 0) return nullptr;
+        for (auto& [oid, c] : g_open) if (oid == id) return c;
         return nullptr;
     };
-    std::erase_if(g_port_order, [&](SDL_JoystickID id) { return find_open(id) == nullptr; });
-    for (auto& [id, c] : open) {
-        if (int(g_port_order.size()) < k_ports && std::find(g_port_order.begin(), g_port_order.end(), id) == g_port_order.end() &&
-            controller_any_button(c)) {
-            g_port_order.push_back(id);
-            std::printf("[thps] input: %s takes port %zu\n", SDL_GameControllerName(c), g_port_order.size());
+    auto say = [&](SDL_JoystickID id, const char* what) {
+        SDL_GameController* c = find_open(id);
+        std::printf("[thps] input: %s %s\n", c ? SDL_GameControllerName(c) : "(controller)", what);
+        std::fflush(stdout);
+    };
+    // Unplugged: the port is free again. If player 1's controller goes, player 2's becomes player 1 (as before the Controllers list).
+    const bool lost0 = g_ports[0] >= 0 && !find_open(g_ports[0]);
+    for (auto& p : g_ports) if (p >= 0 && !find_open(p)) p = -1;
+    if (lost0 && g_ports[1] >= 0) {
+        std::swap(g_ports[0], g_ports[1]);
+        say(g_ports[0], "is player 1 now (player 1's controller was disconnected)");
+    }
+    // The settings menu's requests.
+    for (const PortReq& r : g_port_reqs) {
+        if (r.op == PortReq::Swap) {
+            std::swap(g_ports[0], g_ports[1]);
+            std::printf("[thps] input: players swapped (settings menu): port 1 = %s, port 2 = %s\n",
+                        find_open(g_ports[0]) ? SDL_GameControllerName(find_open(g_ports[0])) : "keyboard only",
+                        find_open(g_ports[1]) ? SDL_GameControllerName(find_open(g_ports[1])) : "none");
             std::fflush(stdout);
+            continue;
+        }
+        if (!find_open(r.id) || r.port < 0 || r.port >= k_ports) continue;
+        const auto cur = std::find(g_ports.begin(), g_ports.end(), r.id);
+        if (cur != g_ports.end()) {
+            if (cur - g_ports.begin() == r.port) continue;
+            std::swap(*cur, g_ports[size_t(r.port)]);   // a controller moving to the other port swaps with whatever holds it
+        } else {
+            g_ports[size_t(r.port)] = r.id;             // the one there (if any) has no port now; it takes a free one when it presses a button
+        }
+        say(r.id, r.port == 0 ? "is player 1 (settings menu)" : "is player 2 (settings menu)");
+    }
+    g_port_reqs.clear();
+    // The first button press claims the first free port.
+    for (auto& [id, c] : g_open) {
+        if (std::find(g_ports.begin(), g_ports.end(), id) != g_ports.end() || !controller_any_button(c)) continue;
+        for (int p = 0; p < k_ports; p++) {
+            if (g_ports[size_t(p)] >= 0) continue;
+            g_ports[size_t(p)] = id;
+            std::printf("[thps] input: %s takes port %d\n", SDL_GameControllerName(c), p + 1);
+            std::fflush(stdout);
+            break;
         }
     }
-    int count = 0;
-    for (SDL_JoystickID id : g_port_order) out[count++] = find_open(id);
-    if (connected) *connected = std::min(int(open.size()), k_ports);
-    return count;
+    for (int p = 0; p < k_ports; p++) out[size_t(p)] = find_open(g_ports[size_t(p)]);
+    if (connected) *connected = std::min(int(g_open.size()), k_ports);
 }
 
 float field_value(SDL_GameController* c, const Uint8* keys, int nkeys, const Field& f) {
@@ -400,10 +537,45 @@ std::mutex g_snap_mutex;
 std::array<PortSnap, k_ports> g_snap{PortSnap{true}};  // port 1 has a controller from the start
 int g_snap_connected = 0;
 
+// The settings menu's Controllers list (main thread writes, the render thread reads).
+std::mutex g_padinfo_mutex;
+std::vector<thps::InputPad> g_padinfo;
+
+// What a controller is pressing right now, as labels ("A + LB", "L-stick left"); "" = nothing. Main thread (SDL calls).
+std::string pressed_now(SDL_GameController* c) {
+    std::string s;
+    auto add = [&](const Field& f) { s += (s.empty() ? "" : " + ") + field_label(f); };
+    for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; b++)
+        if (SDL_GameControllerGetButton(c, SDL_GameControllerButton(b))) add(btn(SDL_GameControllerButton(b)));
+    for (int a = 0; a < SDL_CONTROLLER_AXIS_MAX; a++) {
+        const int v = SDL_GameControllerGetAxis(c, SDL_GameControllerAxis(a));
+        if (v > 16384) add(axis(SDL_GameControllerAxis(a), true));
+        else if (v < -16384 && a != SDL_CONTROLLER_AXIS_TRIGGERLEFT && a != SDL_CONTROLLER_AXIS_TRIGGERRIGHT) add(axis(SDL_GameControllerAxis(a), false));
+    }
+    return s;
+}
+
+void refresh_padinfo(const std::array<SDL_GameController*, k_ports>& pads) {
+    std::vector<thps::InputPad> info;
+    for (auto& [id, c] : g_open) {
+        thps::InputPad p;
+        p.id = int(id);
+        const char* name = SDL_GameControllerName(c);
+        p.name = name && *name ? name : "Controller";
+        p.player = 0;
+        for (int i = 0; i < k_ports; i++) if (pads[size_t(i)] == c) p.player = i + 1;
+        p.pressed = pressed_now(c);
+        info.push_back(std::move(p));
+    }
+    std::lock_guard lock{g_padinfo_mutex};
+    g_padinfo = std::move(info);
+}
+
 void refresh_snapshot() {
     std::array<SDL_GameController*, k_ports> pads{};
     int connected = 0;
-    int count = port_controllers(pads, &connected);
+    port_controllers(pads, &connected);
+    refresh_padinfo(pads);
 #ifdef THPS_FRONTEND
     bool disabled = recompinput::game_input_disabled();  // a menu is open
 #elif defined(THPS_MENU)
@@ -416,10 +588,11 @@ void refresh_snapshot() {
     if (disabled) kl.fresh.fill(false), kl.published.fill(false), kl.any_fresh = kl.any_published = false;
     std::array<PortSnap, k_ports> snap{};
     for (int port = 0; port < k_ports; port++) {
-        if (port >= std::max(connected, 1)) continue;
+        // Port 1 is always there (the keyboard); port 2 when two controllers are open or one was given port 2 (the Controllers list).
+        if (port > 0 && connected <= port && !pads[size_t(port)]) continue;
         snap[port].present = true;
         if (!disabled)
-            read_port(port < count ? pads[port] : nullptr, port == 0 && !thps::options.no_keyboard, &snap[port].buttons, &snap[port].x, &snap[port].y);
+            read_port(pads[size_t(port)], port == 0 && !thps::options.no_keyboard, &snap[port].buttons, &snap[port].x, &snap[port].y);
     }
     std::lock_guard lock{g_snap_mutex};
     g_snap = snap;
@@ -457,23 +630,28 @@ void thps::input_load_bindings(const std::filesystem::path& config_dir) {
     std::ifstream in(g_controls_cfg);
     if (!in) {
         g_preset = preset_name(Preset::ThpsXbox);
+        {
+            std::lock_guard lock{g_bind_mutex};
+            bindings_changed_locked();
+        }
         write_controls_cfg();
         std::printf("[thps] input: wrote default bindings (preset thps-xbox) to %s\n", g_controls_cfg.string().c_str());
         return;
     }
     Bindings b = default_bindings();
     std::array<bool, IN_COUNT> seen{};
-    std::string marker, line;
+    std::string marker, base_marker, line;
     int lines = 0;
     while (std::getline(in, line)) {
         if (line.empty() || line[0] == '#') continue;
         size_t eq = line.find('=');
         std::string name = line.substr(0, eq == std::string::npos ? 0 : eq);
         while (!name.empty() && name.back() == ' ') name.pop_back();
-        if (name == "preset") {
-            marker = line.substr(eq + 1);
-            marker.erase(0, marker.find_first_not_of(' '));
-            while (!marker.empty() && (marker.back() == ' ' || marker.back() == '\r')) marker.pop_back();
+        if (name == "preset" || name == "base") {
+            std::string& m = name == "preset" ? marker : base_marker;
+            m = line.substr(eq + 1);
+            m.erase(0, m.find_first_not_of(' '));
+            while (!m.empty() && (m.back() == ' ' || m.back() == '\r')) m.pop_back();
             continue;
         }
         int idx = -1;
@@ -500,16 +678,25 @@ void thps::input_load_bindings(const std::filesystem::path& config_dir) {
             if (same_bindings(b, g.make(), &seen)) { old_layout = &g; break; }
         }
     }
-    g_preset = !marker.empty() ? marker : same_bindings(b, thps_xbox_bindings()) ? preset_name(Preset::ThpsXbox) : "custom";
+    // The preset the file names, if its bindings still are that preset's (an edit by hand makes it custom: the Controls tab then
+    // checks neither layout); a file without the line is thps-xbox when it has those bindings.
+    Preset named = Preset::ThpsXbox, based = Preset::ThpsXbox;
+    const bool named_ok = parse_preset(marker, named);
+    const bool based_ok = !named_ok && parse_preset(base_marker, based);   // `base = ...`: the layout a custom one was made from
+    g_base = named_ok ? named : based_ok ? based : Preset::ThpsXbox;
+    if (marker.empty()) g_preset = same_bindings(b, thps_xbox_bindings()) ? preset_name(Preset::ThpsXbox) : "custom";
+    else g_preset = named_ok && same_bindings(b, preset_bindings(named)) ? preset_name(named) : "custom";
     if (old_layout) {
         std::filesystem::path bak = g_controls_cfg;
         bak += ".pre-xbox.bak";
         bool kept = backup_file(g_controls_cfg, bak, false);
         b = default_bindings();
         g_preset = preset_name(Preset::ThpsXbox);
+        g_base = Preset::ThpsXbox;
         {
             std::lock_guard lock{g_bind_mutex};
             g_bindings = b;
+            bindings_changed_locked();
         }
         write_controls_cfg();
         std::printf("[thps] input: controls.cfg had the generated %s; moved to preset thps-xbox "
@@ -518,6 +705,7 @@ void thps::input_load_bindings(const std::filesystem::path& config_dir) {
     } else {
         std::lock_guard lock{g_bind_mutex};
         g_bindings = b;
+        bindings_changed_locked();
     }
     if (thps::verbose()) std::printf("[thps] input: %d binding line(s) from %s\n", lines, g_controls_cfg.string().c_str());
 #endif
@@ -600,8 +788,9 @@ void thps::input_update(double t) {
     // Rumble (CLI build), on the main thread like the other SDL calls.
     static std::array<bool, k_ports> last{};
     std::array<SDL_GameController*, k_ports> pads{};
-    int count = port_controllers(pads);
-    for (int i = 0; i < count; i++) {
+    port_controllers(pads);
+    for (int i = 0; i < k_ports; i++) {
+        if (!pads[size_t(i)]) continue;
         bool on = g_rumble[i];
         if (on != last[i]) SDL_GameControllerRumble(pads[i], on ? 0xC000 : 0, on ? 0xC000 : 0, on ? 10000 : 0);
         last[i] = on;
@@ -675,7 +864,7 @@ bool thps::input_get(int port, uint16_t* buttons, float* x, float* y) {
     //    C-left = DELETE) it would have fired together with the back.
     // A scripted/explicit B (or C-right) is untouched. (THPS1 reads A/B in menus only: thps::game::b_is_flip_in_game is false.)
     if constexpr (thps::game::b_is_flip_in_game) {
-        if (g_preset == "thps-xbox" && (*buttons & 0x4000) && (*buttons & 0x0001)) {
+        if (g_pair_split.load() && (*buttons & 0x4000) && (*buttons & 0x0001)) {
             if (thps::in_gameplay_3d() && thps::skater_in_control()) {
                 *buttons &= ~uint16_t(0x4000);
                 if (port == 0) g_b_dropped.fetch_add(1);
@@ -731,8 +920,9 @@ bool thps::name_entry_active() {
 
 bool thps::input_connected(int port) {
     if (port == 0) return true;
+    if (port < 0 || port >= k_ports) return false;
     std::lock_guard lock{g_snap_mutex};
-    return port < g_snap_connected;
+    return g_snap[size_t(port)].present;
 }
 
 // Rumble (only with --rumble-pak).
@@ -913,8 +1103,10 @@ std::string thps::input_set_preset(const std::string& name) {
         std::lock_guard lock{g_bind_mutex};
         if (!same_bindings(g_bindings, b)) backup_file(g_controls_cfg, g_controls_cfg.string() + ".bak", true);
         g_bindings = b;
+        g_preset = preset_name(p);
+        g_base = p;
+        bindings_changed_locked();
     }
-    g_preset = preset_name(p);
     write_controls_cfg();
     bool saved = std::filesystem::exists(g_controls_cfg);
 #endif
@@ -956,10 +1148,278 @@ std::string thps::input_bind(const std::string& args) {
     {
         std::lock_guard lock{g_bind_mutex};
         g_bindings[idx] = fields;
+        g_preset = "custom";
+        bindings_changed_locked();
     }
-    g_preset = "custom";
     write_controls_cfg();
     bool saved = std::filesystem::exists(g_controls_cfg);
 #endif
     return "ok bind " + name + " saved=" + (saved ? "1" : "0");
+}
+
+// ---- The settings menu's Controls tab: rebinding and the Controllers list (CLI build) ----------------------------------------------
+// Each input (a controls.cfg line) shows two controller slots and two keyboard slots: the first and second field of that kind on
+// the line (a hand-edited line may have more; they are kept, and the tab shows "+N").
+
+int thps::input_count() { return IN_COUNT; }
+std::string thps::input_id(int in) { return in >= 0 && in < IN_COUNT ? k_in_names[in] : ""; }
+std::string thps::input_label(int in) { return in >= 0 && in < IN_COUNT ? input_label_of(in) : ""; }
+uint64_t thps::input_bindings_version() { return g_bind_version.load(); }
+
+int thps::input_find(const std::string& id) {
+    for (int i = 0; i < IN_COUNT; i++) if (id == k_in_names[i]) return i;
+    return -1;
+}
+
+std::vector<std::string> thps::input_slots(int in, bool keyboard) {
+    std::vector<std::string> out;
+    if (in < 0 || in >= IN_COUNT) return out;
+    std::lock_guard lock{g_bind_mutex};
+    for (const Field& f : g_bindings[in]) if ((f.type == Field::Key) == keyboard) out.push_back(field_name(f));
+    return out;
+}
+
+std::string thps::input_field_label(const std::string& field) {
+    Field f;
+    if (!parse_field(field, f)) return field;
+    return field_label(f);
+}
+
+// Puts `field` ("button:y", "axis:lefttrigger+", "key:U", or "none" = clear the slot) into slot 0/1 of input `in`'s controller or
+// keyboard fields. A field another input of the same group (may_share) already has moves here: that input gets this slot's old
+// field instead (a swap), or loses it when the slot was empty. Sharing with the other group is allowed and named in the message.
+thps::RebindResult thps::input_rebind(int in, bool keyboard, int slot, const std::string& field) {
+    RebindResult r;
+#ifdef THPS_FRONTEND
+    (void)in, (void)keyboard, (void)slot, (void)field;
+    r.reply = "err rebind: the launcher build has its own Controls tab";
+    return r;
+#else
+    Field f;
+    if (in < 0 || in >= IN_COUNT || slot < 0 || slot > 1) { r.reply = "err rebind: no such input or slot"; return r; }
+    if (!parse_field(field, f)) { r.reply = "err rebind: bad field " + field; return r; }
+    if (f.type != Field::None && (f.type == Field::Key) != keyboard) {
+        r.reply = "err rebind: " + field + " is not a " + (keyboard ? "key" : "controller input");
+        return r;
+    }
+    const std::string who = std::string(k_in_names[in]) + (keyboard ? " key " : " pad ") + std::to_string(slot);
+    const std::string label = input_label_of(in);
+    std::vector<std::string> swapped;
+    std::string message;
+    bool backup = false;
+    {
+        std::lock_guard lock{g_bind_mutex};
+        std::vector<Field>& list = g_bindings[size_t(in)];
+        auto device_pos = [&] {   // indices of this device's fields in `list`
+            std::vector<size_t> pos;
+            for (size_t i = 0; i < list.size(); i++) if ((list[i].type == Field::Key) == keyboard) pos.push_back(i);
+            return pos;
+        };
+        auto has = [](const std::vector<Field>& l, const Field& g) {
+            return std::any_of(l.begin(), l.end(), [&](const Field& h) { return same_field(g, h); });
+        };
+        std::vector<size_t> pos = device_pos();
+        const Field old = size_t(slot) < pos.size() ? list[pos[size_t(slot)]] : Field{};
+        if (f.type != Field::None && old.type != Field::None && same_field(f, old)) {
+            r.ok = true;
+            r.reply = "ok rebind " + who + " " + field_name(f) + " unchanged";
+            r.message = label + ": " + field_label(f) + " (unchanged)";
+            return r;
+        }
+        if (f.type == Field::None) {
+            if (old.type != Field::None) list.erase(list.begin() + std::ptrdiff_t(pos[size_t(slot)]));
+            message = label + ": " + (keyboard ? "key " : "controller button ") + std::to_string(slot + 1) + " cleared";
+        } else {
+            std::string notes;
+            if (has(list, f)) {
+                // Already in this input's other slot: the two slots trade places (or it moves to the empty slot).
+                auto here = std::find_if(list.begin(), list.end(), [&](const Field& g) { return same_field(f, g); });
+                if (old.type != Field::None) {
+                    *here = old;
+                    list[pos[size_t(slot)]] = f;
+                } else {
+                    list.erase(here);
+                    pos = device_pos();
+                    list.insert(pos.empty() ? list.end() : list.begin() + std::ptrdiff_t(pos.back() + 1), f);
+                }
+            } else {
+                for (int j = 0; j < IN_COUNT; j++) {
+                    if (j == in) continue;
+                    std::vector<Field>& other = g_bindings[size_t(j)];
+                    const auto hit = std::find_if(other.begin(), other.end(), [&](const Field& g) { return same_field(f, g); });
+                    if (hit == other.end()) continue;
+                    if (may_share(in, j)) {
+                        notes += std::string(notes.empty() ? "" : "; ") + "also " + input_label_of(j);
+                        continue;
+                    }
+                    const bool give_old = old.type != Field::None && !has(other, old);
+                    if (give_old) *hit = old;
+                    else other.erase(hit);
+                    swapped.push_back(k_in_names[j]);
+                    notes += std::string(notes.empty() ? "" : "; ") + input_label_of(j) + " " +
+                             (give_old ? "is now " + field_label(old) : "lost it");
+                }
+                if (size_t(slot) < pos.size()) list[pos[size_t(slot)]] = f;
+                else list.insert(pos.empty() ? list.end() : list.begin() + std::ptrdiff_t(pos.back() + 1), f);
+            }
+            message = label + ": " + field_label(f) + (notes.empty() ? "" : " (" + notes + ")");
+        }
+        g_preset = same_bindings(g_bindings, thps_xbox_bindings()) ? preset_name(Preset::ThpsXbox)
+                 : same_bindings(g_bindings, n64_bindings())       ? preset_name(Preset::N64)
+                                                                    : "custom";
+        bindings_changed_locked();
+        backup = !g_ui_backup_done;
+        g_ui_backup_done = true;
+    }
+    if (backup) backup_file(g_controls_cfg, g_controls_cfg.string() + ".bak", true);   // once per session: the file as it was before
+    write_controls_cfg();
+    r.ok = true;
+    r.reply = "ok rebind " + who + " " + (f.type == Field::None ? std::string("none") : field_name(f)) + " swapped=";
+    for (size_t i = 0; i < swapped.size(); i++) r.reply += (i ? "," : "") + swapped[i];
+    if (swapped.empty()) r.reply += "-";
+    r.reply += " preset=" + thps::input_preset_name() + " saved=" + (std::filesystem::exists(g_controls_cfg) ? "1" : "0");
+    r.message = message;
+    std::printf("[thps] input: %s\n", r.reply.c_str() + 3);
+    std::fflush(stdout);
+    return r;
+#endif
+}
+
+// The fields input `in` has in the preset loaded or picked last, as input_slots lists them (the Controls tab marks a slot that differs).
+std::vector<std::string> thps::input_default_slots(int in, bool keyboard) {
+    std::vector<std::string> out;
+#ifndef THPS_FRONTEND
+    if (in < 0 || in >= IN_COUNT) return out;
+    std::lock_guard lock{g_bind_mutex};
+    const Bindings base = preset_bindings(g_base);   // a named copy: a range-for over a temporary's element would dangle
+    for (const Field& f : base[size_t(in)]) if ((f.type == Field::Key) == keyboard) out.push_back(field_name(f));
+#else
+    (void)in, (void)keyboard;
+#endif
+    return out;
+}
+
+std::string thps::input_base_preset() {
+#ifdef THPS_FRONTEND
+    return "";
+#else
+    std::lock_guard lock{g_bind_mutex};
+    return preset_name(g_base);
+#endif
+}
+
+// One input back to the preset loaded or picked last (thps-xbox for a file edited by hand).
+thps::RebindResult thps::input_reset_input(int in) {
+    RebindResult r;
+#ifdef THPS_FRONTEND
+    (void)in;
+    r.reply = "err reset: the launcher build has its own Controls tab";
+#else
+    if (in < 0 || in >= IN_COUNT) { r.reply = "err reset: no such input"; return r; }
+    std::string base, notes;
+    std::vector<std::string> swapped;
+    {
+        std::lock_guard lock{g_bind_mutex};
+        base = preset_name(g_base);
+        const Bindings def = preset_bindings(g_base);
+        const std::vector<Field>& want = def[size_t(in)];
+        std::vector<Field>& list = g_bindings[size_t(in)];
+        auto has = [](const std::vector<Field>& l, const Field& g) {
+            return std::any_of(l.begin(), l.end(), [&](const Field& h) { return same_field(g, h); });
+        };
+        // The fields this row gives up (it has them, its default does not): what another input whose field moves back here gets in return.
+        std::vector<Field> freed;
+        for (const Field& f : list) if (!has(want, f)) freed.push_back(f);
+        // As a rebind (input_rebind): a default field another input of the same group holds now is taken from it, and that input gets a freed
+        // field of the same kind (its own default first), or loses it. Without this, Default on one row of a swap left the button on two
+        // inputs (review 2026-10-26, finding 4: Flip X -> Y swaps Grind onto X; Default on Flip alone gave X to both).
+        for (const Field& f : want) {
+            if (has(list, f)) continue;
+            for (int j = 0; j < IN_COUNT; j++) {
+                if (j == in || may_share(in, j)) continue;
+                std::vector<Field>& other = g_bindings[size_t(j)];
+                const auto hit = std::find_if(other.begin(), other.end(), [&](const Field& g) { return same_field(f, g); });
+                if (hit == other.end()) continue;
+                auto pick = freed.end();
+                for (auto it = freed.begin(); it != freed.end(); ++it) {
+                    if ((it->type == Field::Key) != (f.type == Field::Key) || has(other, *it)) continue;
+                    if (pick == freed.end() || (has(def[size_t(j)], *it) && !has(def[size_t(j)], *pick))) pick = it;
+                }
+                if (pick != freed.end()) {
+                    *hit = *pick;
+                    notes += std::string(notes.empty() ? "" : "; ") + input_label_of(j) + " is now " + field_label(*pick);
+                    freed.erase(pick);
+                } else {
+                    other.erase(hit);
+                    notes += std::string(notes.empty() ? "" : "; ") + input_label_of(j) + " lost " + field_label(f);
+                }
+                swapped.push_back(k_in_names[j]);
+            }
+        }
+        list = want;
+        g_preset = same_bindings(g_bindings, thps_xbox_bindings()) ? preset_name(Preset::ThpsXbox)
+                 : same_bindings(g_bindings, n64_bindings())       ? preset_name(Preset::N64)
+                                                                    : "custom";
+        bindings_changed_locked();
+    }
+    write_controls_cfg();
+    r.ok = true;
+    r.reply = "ok reset " + std::string(k_in_names[in]) + " to " + base + " swapped=";
+    for (size_t i = 0; i < swapped.size(); i++) r.reply += (i ? "," : "") + swapped[i];
+    if (swapped.empty()) r.reply += "-";
+    r.reply += " preset=" + thps::input_preset_name();
+    r.message = std::string(input_label_of(in)) + ": back to the " + (base == "n64" ? "N64 layout" : "face-button layout") +
+                (notes.empty() ? "" : " (" + notes + ")");
+    std::printf("[thps] input: %s\n", r.reply.c_str() + 3);
+    std::fflush(stdout);
+#endif
+    return r;
+}
+
+std::vector<thps::InputPad> thps::input_pads() {
+    std::lock_guard lock{g_padinfo_mutex};
+    return g_padinfo;
+}
+
+// Any thread: applied by the main thread's next update.
+void thps::input_assign_port(int id, int port) {
+    std::lock_guard lock{g_port_mutex};
+    g_port_reqs.push_back({PortReq::Assign, SDL_JoystickID(id), port});
+}
+void thps::input_swap_ports() {
+    std::lock_guard lock{g_port_mutex};
+    g_port_reqs.push_back({PortReq::Swap, -1, 0});
+}
+
+// --control "ports": the open controllers and their ports; "ports swap"; "ports assign N P" (N = index in that list, P = 1 | 2). Main
+// thread: the request is applied before the reply.
+std::string thps::input_ports(const std::string& args) {
+    std::istringstream in(args);
+    std::string op;
+    in >> op;
+    std::vector<InputPad> pads = input_pads();
+    if (op == "swap") input_swap_ports();
+    else if (op == "assign") {
+        int n = -1, p = 0;
+        in >> n >> p;
+        if (n < 0 || n >= int(pads.size()) || p < 1 || p > k_ports) return "err ports usage: ports assign INDEX 1|2 (INDEX in 0.." + std::to_string(pads.size()) + ")";
+        input_assign_port(pads[size_t(n)].id, p - 1);
+    } else if (!op.empty()) return "err ports usage: ports | ports swap | ports assign INDEX 1|2";
+    std::array<SDL_GameController*, k_ports> ports{};
+    port_controllers(ports);
+    refresh_padinfo(ports);
+    pads = input_pads();
+    std::string s = "ok ports n=" + std::to_string(pads.size());
+    for (int p = 0; p < k_ports; p++) {
+        int idx = -1;
+        for (size_t i = 0; i < pads.size(); i++) if (pads[i].player == p + 1) idx = int(i);
+        s += " p" + std::to_string(p + 1) + "=" + (idx < 0 ? std::string("-") : std::to_string(idx));
+    }
+    for (size_t i = 0; i < pads.size(); i++) {   // padN=NAME#ID:pPLAYER:PRESSED (spaces as _; PRESSED "-" = nothing)
+        std::string name = pads[i].name, pressed = pads[i].pressed.empty() ? "-" : pads[i].pressed;
+        std::replace(name.begin(), name.end(), ' ', '_');
+        std::replace(pressed.begin(), pressed.end(), ' ', '_');
+        s += " pad" + std::to_string(i) + "=" + name + "#" + std::to_string(pads[i].id) + ":p" + std::to_string(pads[i].player) + ":" + pressed;
+    }
+    return s;
 }
