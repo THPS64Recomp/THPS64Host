@@ -48,6 +48,11 @@ int thps_cheat_is_on(uint8_t* rdram, recomp_context* ctx);
  * reading it again before the next song is copied over it. src/music.cpp */
 void thps_music_load_song(uint8_t* rdram, recomp_context* ctx);
 
+/* libc memset(a0 = dst, a1 = byte, a2 = len) / memcpy(a0 = dst, a1 = src, a2 = len) entry: done natively, v0 = dst; returns 1 (skip the
+ * original body), or 0 for a range outside RDRAM (the original runs). src/hooks.cpp */
+int thps_memset(uint8_t* rdram, recomp_context* ctx);
+int thps_memcpy(uint8_t* rdram, recomp_context* ctx);
+
 /* Diagnostic at GameEntry: verifies the main image the boot loader inflated. */
 void thps_on_game_entry(uint8_t* rdram, recomp_context* ctx);
 

@@ -533,6 +533,7 @@ public:
         if (canary) thps::dl_canary_end(app->core.RDRAM, n);
         thps::hfr_task_end(app->state.get());
         note_time(thps::stats.send_dl_us, thps::stats.send_dl_us_max, t0);
+        thps::ftime_span("send_dl", t0);
     }
 
     // Called by ultramodern's VI thread every frame while no game is running.
@@ -596,6 +597,7 @@ public:
         thps::stats.rt64_window_presents.store(app->presentQueue->windowPresentCount.load());
         thps::stats.frames_presented.fetch_add(1);
         note_time(thps::stats.update_screen_us, thps::stats.update_screen_us_max, t0);
+        thps::ftime_span("update_screen", t0);
     }
 
     void shutdown() override {

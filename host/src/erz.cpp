@@ -5,6 +5,7 @@
 #include "erz.h"
 
 #include <algorithm>
+#include <iterator>
 #include <cstring>
 
 namespace thps {
@@ -76,7 +77,20 @@ struct HuffEntry {
     uint32_t mask, code;
     int len, sym;
 };
-using HuffTable = std::vector<HuffEntry>;
+// A table plus a lookup of its next kLutBits bits (load freeze, 2026-10-18: the linear search was most of the decode time). The LUT
+// gives the same answer as the linear search in table order (first match wins); codes longer than kLutBits fall back to that search.
+constexpr int kLutBits = 9;
+struct HuffTable {
+    std::vector<HuffEntry> entries;
+    int16_t lut[1 << kLutBits];   // (len << 8) | sym, or -1: no entry of kLutBits bits or fewer matches
+    void build_lut() {
+        std::fill(std::begin(lut), std::end(lut), int16_t(-1));
+        for (auto it = entries.rbegin(); it != entries.rend(); ++it) {   // backwards: an earlier entry overwrites a later one
+            if (it->len > kLutBits) continue;
+            for (uint32_t k = 0; k < (1u << (kLutBits - it->len)); k++) lut[it->code | (k << it->len)] = int16_t((it->len << 8) | it->sym);
+        }
+    }
+};
 
 static uint32_t bit_reverse(uint32_t v, int n) {
     uint32_t r = 0;
@@ -89,21 +103,29 @@ static void read_table(Bits1& bits, HuffTable& table) {
     if (num == 0) return;  // MIPS leaves the previous table in place
     int lens[32];
     for (uint32_t i = 0; i < num; i++) lens[i] = int(bits.read(4));
-    table.clear();
+    table.entries.clear();
     uint32_t code = 0;
     for (int L = 1; L <= 16; L++) {
         for (uint32_t sym = 0; sym < num; sym++) {
             if (lens[sym] == L) {
-                table.push_back({(1u << L) - 1, bit_reverse(code, L), L, int(sym)});
+                table.entries.push_back({(1u << L) - 1, bit_reverse(code, L), L, int(sym)});
                 code++;
             }
         }
         code <<= 1;
     }
+    table.build_lut();
 }
 
 static uint32_t decode(Bits1& bits, const HuffTable& table) {
-    for (const auto& e : table) {
+    const int16_t hit = table.lut[bits.peek((1u << kLutBits) - 1)];
+    if (hit >= 0) {
+        bits.skip(hit >> 8);
+        const int sym = hit & 0xFF;
+        if (sym < 2) return uint32_t(sym);
+        return (1u << (sym - 1)) | bits.read(sym - 1);
+    }
+    for (const auto& e : table.entries) {
         if (bits.peek(e.mask) == e.code) {
             bits.skip(e.len);
             if (e.sym < 2) return uint32_t(e.sym);
@@ -113,10 +135,17 @@ static uint32_t decode(Bits1& bits, const HuffTable& table) {
     throw DecodeError{"Huffman decode error"};
 }
 
+// Appends n bytes copied from `back` bytes before the end, byte by byte (overlaps intended: a run repeats).
+static inline void copy_match(std::vector<uint8_t>& out, size_t back, uint32_t n) {
+    const size_t src = out.size() - back;
+    for (uint32_t i = 0; i < n; i++) out.push_back(out[src + i]);   // capacity reserved up front: no reallocation
+}
+
 static void unpack1(const std::vector<uint8_t>& buf, uint32_t usize, std::vector<uint8_t>& out) {
     Bits1 bits(buf, 0);
     bits.read(2);  // lock / key flags
-    HuffTable raw, dist, length;
+    HuffTable raw, dist, length;   // an empty table (never read) matches nothing, as before
+    raw.build_lut(), dist.build_lut(), length.build_lut();
     while (out.size() < usize) {
         read_table(bits, raw);
         read_table(bits, dist);
@@ -130,8 +159,7 @@ static void unpack1(const std::vector<uint8_t>& buf, uint32_t usize, std::vector
             uint32_t d = decode(bits, dist) + 1;
             n = decode(bits, length) + 2;
             if (d > out.size()) throw DecodeError{"match before start"};
-            size_t src = out.size() - d;
-            for (uint32_t i = 0; i < n; i++) out.push_back(out[src + i]);  // overlaps intended
+            copy_match(out, d, n);
         }
     }
 }
@@ -215,14 +243,13 @@ static void unpack2(const std::vector<uint8_t>& buf, uint32_t usize, std::vector
             }
         }
         if (off > out.size()) throw DecodeError{"match before start"};
-        size_t src = out.size() - off;
-        for (uint32_t i = 0; i < n; i++) out.push_back(out[src + i]);
+        copy_match(out, off, n);
     }
 }
 
 }  // namespace
 
-bool erz_decompress(const uint8_t* chunk, size_t avail, std::vector<uint8_t>& out, ErzInfo& info, std::string& err) {
+bool erz_decompress(const uint8_t* chunk, size_t avail, std::vector<uint8_t>& out, ErzInfo& info, std::string& err, bool check_crc) {
     out.clear();
     if (avail < 18) {
         err = "short header";
@@ -244,7 +271,8 @@ bool erz_decompress(const uint8_t* chunk, size_t avail, std::vector<uint8_t>& ou
         return false;
     }
     std::vector<uint8_t> src(chunk + 18, chunk + 18 + info.psize);
-    info.pcrc_ok = erz_crc16(src.data(), src.size()) == info.pcrc;
+    if (check_crc) info.pcrc_ok = erz_crc16(src.data(), src.size()) == info.pcrc;
+    out.reserve(size_t(info.usize) + 0x1000);
     src.resize(src.size() + 8, 0);  // the bit reader's lookahead may run past the end
     try {
         if (info.method == 1) {
@@ -263,7 +291,7 @@ bool erz_decompress(const uint8_t* chunk, size_t avail, std::vector<uint8_t>& ou
         err = "short output";
         return false;
     }
-    info.ucrc_ok = erz_crc16(out.data(), info.usize) == info.ucrc;
+    if (check_crc) info.ucrc_ok = erz_crc16(out.data(), info.usize) == info.ucrc;
     return true;
 }
 

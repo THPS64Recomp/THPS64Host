@@ -16,5 +16,7 @@ uint16_t erz_crc16(const uint8_t* data, size_t len);
 // `chunk` points at the 18-byte header; `avail` bytes are readable.
 // Returns false (with `err`) on a malformed stream. `out` may exceed usize
 // (the handwritten decoders also overrun to the end of the last block).
-bool erz_decompress(const uint8_t* chunk, size_t avail, std::vector<uint8_t>& out, ErzInfo& info, std::string& err);
+// check_crc = false skips both CRCs (pcrc_ok / ucrc_ok stay false): the game's own decoders never check them, and the unpack
+// hook only reports them in verbose mode.
+bool erz_decompress(const uint8_t* chunk, size_t avail, std::vector<uint8_t>& out, ErzInfo& info, std::string& err, bool check_crc = true);
 }

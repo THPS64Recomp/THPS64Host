@@ -655,6 +655,51 @@ class Session:
             # ("hold", FILE): debugging aid, blocks until FILE exists (attach a debugger / sample the host meanwhile; touch FILE to go on).
             while not Path(st[1]).exists():
                 time.sleep(1)
+        elif kind == "sample":
+            # ("sample", SECONDS, FILE): macOS `sample` of the host in the background (1 ms stacks of every thread, for the load-freeze
+            # attribution); ("sample_wait",) waits for it. Other systems: a note, nothing sampled.
+            if sys.platform != "darwin":
+                self.notes.append("sample: macOS only, skipped")
+            else:
+                Path(st[2]).parent.mkdir(parents=True, exist_ok=True)
+                self.sampler = subprocess.Popen(["/usr/bin/sample", str(self.inst.proc.pid), str(st[1]), "1", "-mayDie", "-file", str(st[2])],
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif kind == "sample_wait":
+            if getattr(self, "sampler", None):
+                self.sampler.wait(timeout=120)
+                self.sampler = None
+        elif kind == "ftime_max":
+            # ("ftime_max", FILE, {"presented": MS, "game": MS}): `ftime stop FILE` (the window `ftime start` opened), then every named
+            # stream's longest interval must stay under its limit. A loaded machine (load avg > 2x CPUs) turns a failure into a warning.
+            Path(st[1]).parent.mkdir(parents=True, exist_ok=True)   # the host only writes the CSV into an existing folder
+            r = self.inst.cmd(f"ftime stop {st[1]}", timeout=30 * self.slow)
+            load = H.load_info()
+            got = {k: float(r.get(f"{k}_ms_max", "nan")) for k in st[2]}
+            if len(st) > 3:   # ("ftime_max", FILE, LIMITS, KEY): also keep the values for an ftime_median step
+                self.__dict__.setdefault("ftime_kept", {}).setdefault(st[3], []).append(got)
+            self.notes.append("ftime_max: " + " ".join(f"{k}={v:.1f}ms(<{st[2][k]})" for k, v in got.items()) + f"; load {load['load1']:.1f}")
+            bad = [f"{k} {v:.1f} ms >= {st[2][k]}" for k, v in got.items() if not v < st[2][k]]
+            if bad:
+                msg = "ftime_max: longest interval " + ", ".join(bad)
+                if load["overloaded"]:
+                    self.warnings.append(msg + f" (load avg {load['load1']:.1f} > 2x{load['ncpu']} CPUs: warning only)")
+                else:
+                    raise StepFail(msg)
+        elif kind == "ftime_median":
+            # ("ftime_median", KEY, STREAM, MS): the median of the longest STREAM intervals kept under KEY by ftime_max steps must stay under
+            # MS. One preempted window (another process on a busy machine) then does not fail the check; a slower load in every window does.
+            vals = sorted(g[st[2]] for g in getattr(self, "ftime_kept", {}).get(st[1], []))
+            if not vals:
+                raise StepFail(f"ftime_median: no values kept under {st[1]}")
+            med = vals[len(vals) // 2] if len(vals) % 2 else (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2
+            load = H.load_info()
+            self.notes.append(f"ftime_median {st[1]}: {st[2]} {med:.1f} ms of {[round(v, 1) for v in vals]} (< {st[3]}); load {load['load1']:.1f}")
+            if not med < st[3]:
+                msg = f"ftime_median: {st[2]} median {med:.1f} ms >= {st[3]} ({[round(v, 1) for v in vals]})"
+                if load["overloaded"]:
+                    self.warnings.append(msg + f" (load avg {load['load1']:.1f} > 2x{load['ncpu']} CPUs: warning only)")
+                else:
+                    raise StepFail(msg)
         elif kind == "wait":
             self.inst.wait_frames(st[1], timeout=120 * self.slow)
         elif kind == "dl":
