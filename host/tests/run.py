@@ -407,6 +407,33 @@ class Session:
             self.notes.append(f"ring_black {name}: {len(files)} frames, brightest margin pixel (outer {cols} columns) {worst}")
             if worst > max_luma:
                 raise StepFail(f"ring_black: a margin pixel has luma {worst} (> {max_luma}): stale picture in the ring")
+        elif kind == "border":
+            # ("border", NAME, "black"|"picture"): the game's 8 px frame on a fresh composited frame (tests/crop_sessions.py: border_check):
+            # "black" = no band holds picture (the default), "picture" = all four bands do (border=fill). The frame is kept as <out>/NAME.png.
+            from crop_sessions import border_check
+            _, name, want = st
+            edir = self.out / f"border_{name}"
+            shutil.rmtree(edir, ignore_errors=True)
+            edir.mkdir(parents=True)
+            self.inst.send(f"edges 2 {edir}")
+            self.inst.expect("ok edges", 60 * self.slow)
+            deadline = time.monotonic() + 20 * self.slow   # the PNG writer threads (a loaded machine: > 0.5 s)
+            while not list(edir.glob("edges_*.png")) and time.monotonic() < deadline:
+                time.sleep(0.25)
+            time.sleep(0.5)
+            pngs = sorted(edir.glob("edges_*.png"))
+            if not pngs:
+                raise StepFail(f"border {name}: no composited frame was saved in {edir}")
+            png = pngs[-1]
+            shutil.copyfile(png, self.out / f"{name}.png")
+            img = H.read_png(png)
+            got = border_check(img)
+            desc = " ".join(f"{k}={v:.0%}" for k, v in got.items())
+            self.notes.append(f"border {name}.png ({img.w}x{img.h}): picture in {desc}")
+            if want == "black" and max(got.values()) > 0.05:
+                raise StepFail(f"border {name}: expected the black frame, but bands hold picture ({desc})")
+            if want == "picture" and min(got.values()) < 0.90:
+                raise StepFail(f"border {name}: expected picture to the edges, but a band is black ({desc})")
         elif kind == "ctl":
             # ("ctl", "COMMAND ..."): send a raw --control command (exploration), the reply goes into the notes.
             self.inst.send(st[1])

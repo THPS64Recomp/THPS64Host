@@ -117,6 +117,16 @@
                         </div>
                     </div>
                     <div class="config-option">
+                        <label class="config-option__title">Picture Border</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="border" data-checked="border" value="original" id="border_original" />
+                            <label class="config-option__tab-label" id="lbl_border_original" for="border_original">Original</label>
+                            <input type="radio" name="border" data-checked="border" value="fill" id="border_fill" />
+                            <label class="config-option__tab-label" id="lbl_border_fill" for="border_fill">Fill</label>
+                            <div class="config-option__details">The game leaves a thin black frame around the 3D picture that a TV hid. Fill puts picture there. Nothing is cut off or zoomed.</div>
+                        </div>
+                    </div>
+                    <div class="config-option">
                         <label class="config-option__title">Resolution</label>
                         <div class="config-option__list">
                             <input type="radio" name="res_scale" data-checked="res_scale" value="0" id="rs_0" />
