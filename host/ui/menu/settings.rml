@@ -107,6 +107,16 @@
                         </div>
                     </div>
                     <div class="config-option">
+                        <label class="config-option__title">Two-Player Split Screen</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="split" data-checked="split" value="original" id="split_original" />
+                            <label class="config-option__tab-label" id="lbl_split_original" for="split_original">Original (4:3)</label>
+                            <input type="radio" name="split" data-checked="split" value="wide" id="split_wide" />
+                            <label class="config-option__tab-label" id="lbl_split_wide" for="split_wide">Fill picture</label>
+                            <div class="config-option__details">In widescreen, each player's view fills its half of the picture, and each player's score and meter sit at the edge of their own view. Original keeps both views in the 4:3 middle.</div>
+                        </div>
+                    </div>
+                    <div class="config-option">
                         <label class="config-option__title">Resolution</label>
                         <div class="config-option__list">
                             <input type="radio" name="res_scale" data-checked="res_scale" value="0" id="rs_0" />

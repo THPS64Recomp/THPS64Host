@@ -1,0 +1,232 @@
+RT64 4337374 (after rt64-present-capture-widescreen.patch): two-player split screens in widescreen (v0.2).
+
+RT64 widens a 3D view (stretched viewport, aspect-adjusted projection) only when its viewport spans the whole width of the
+framebuffer pair's scissor and is wider than tall. A side-by-side split screen draws two views, each half the width and
+taller than wide, so both stay in the centred 4:3 area. With RT64::splitScreenWide set (the host sets it; default off,
+upstream behaviour), a view that fills one side of the pair's scissor up to its middle and most of its height, in a pair
+that has such a view on both sides, is widened like a full-width view, in FramebufferRenderer and ProjectionProcessor
+alike, and a fill rect covering such a half (a per-view clear) is stretched with it. A lone half-width view (a model on a
+menu screen) keeps the upstream rule. With RT64::splitScreenBlackBands set (the host sets it; default off) and
+splitScreenWide off (the host's `split = original`), a pair with views on both halves keeps its side bands black: a whole-width colour fill clears the stretched rect to black, then its own colour
+over the 4:3 area only (the game's frame clear, often the sky colour, filled the bands around the two 4:3 views). New header
+src/render/rt64_split_screen.h (the rules and three counters); the fill call gets innerRect / bandsBlack.
+Patched lines are marked [thps-recomp].
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -15,6 +15,7 @@
+ 
+ #include "rt64_descriptor_sets.h"
+ #include "rt64_render_worker.h"
++#include "rt64_split_screen.h"
+ 
+ // TODO: Move to shared.
+ 
+@@ -50,6 +51,13 @@
+ };
+ 
+ namespace RT64 {
++    // [thps-recomp] Split screen in widescreen (rt64_split_screen.h).
++    std::atomic<bool> splitScreenWide{ false };
++    std::atomic<bool> splitScreenBlackBands{ false };
++    std::atomic<uint64_t> splitScreenViews{ 0 };
++    std::atomic<uint64_t> splitScreenFills{ 0 };
++    std::atomic<uint64_t> splitScreenBands{ 0 };
++
+     // Helper functions.
+     
+     RenderRect convertFixedRect(FixedRect rect, hlslpp::float2 resScale, int32_t fbWidth, float aspectRatioScale, float extOriginPercentage, int32_t horizontalMisalignment, uint16_t leftOrigin, uint16_t rightOrigin) {
+@@ -602,7 +610,11 @@
+                 bool rectCoversWholeTarget = (clearRect.rect.left == 0) && (clearRect.rect.top == 0) && (uint32_t(clearRect.rect.right) == chosenTarget->width) && (uint32_t(clearRect.rect.bottom) == chosenTarget->height);
+                 const RenderRect *clearRects = rectCoversWholeTarget ? nullptr : &clearRect.rect;
+                 uint32_t clearRectCount = rectCoversWholeTarget ? 0 : 1;
+-                if (fbStorage->colorTarget != nullptr) {
++                if ((fbStorage->colorTarget != nullptr) && clearRect.bandsBlack) {   // [thps-recomp] (rt64_split_screen.h)
++                    worker->commandList->clearColor(0, RenderColor(0.0f, 0.0f, 0.0f, 1.0f), clearRects, clearRectCount);
++                    worker->commandList->clearColor(0, clearRect.color, &clearRect.innerRect, 1);
++                }
++                else if (fbStorage->colorTarget != nullptr) {
+                     worker->commandList->clearColor(0, clearRect.color, clearRects, clearRectCount);
+                 }
+                 else {
+@@ -1450,6 +1462,18 @@
+         uint32_t vertexTestZFaceIndicesStart = 0;
+         int32_t vertexTestZCallIndex = -1;
+         RenderViewport viewportClip;
++        // [thps-recomp] Split screen: does this pair have side-by-side views on both halves (rt64_split_screen.h)?
++        const auto splitViewRect = [&](uint32_t i) {
++            const Projection &q = fbPair.projections[i];
++            if (q.scissorRect.isNull() || !q.usesViewport()) {
++                return FixedRect();
++            }
++            return q.scissorRect.intersection(drawData.rspViewports[q.transformsIndex].rect(&drawData.viewportClipRatios[q.transformsIndex * 4]));
++        };
++        const bool splitPair = splitScreenHalves(fbPair.projectionCount, splitViewRect, fbPair.scissorRect) == 3;
++        // [thps-recomp] An unwidened split screen (splitScreenWide off): its whole-width colour fills keep the side bands black.
++        const bool splitPairUnwidened = splitScreenBlackBands.load(std::memory_order_relaxed) && !splitScreenWide.load(std::memory_order_relaxed) && (aspectRatioScale > 1.0f) &&
++            (splitScreenHalves(fbPair.projectionCount, splitViewRect, fbPair.scissorRect, true) == 3);
+         for (uint32_t pr = 0; (pr < fbPair.projectionCount) && (globalCallIndex < p.maxGameCall); pr++) {
+             const Projection &proj = fbPair.projections[pr];
+             if (proj.scissorRect.isNull()) {
+@@ -1494,6 +1518,12 @@
+                 bool coversWholeWidth = !intersectionRect.isEmpty() && (intersectionRect.ulx <= (fbPair.scissorRect.ulx + wideSlack)) && ((intersectionRect.lrx + wideSlack) >= fbPair.scissorRect.lrx);
+                 bool horizontalRatio = !intersectionRect.isEmpty() && (intersectionRect.width(true, true) > intersectionRect.height(true, true));
+                 bool useWideViewport = (viewportOrigin == G_EX_ORIGIN_NONE) && coversWholeWidth && horizontalRatio;
++                // [thps-recomp] Split screen: each side-by-side half is widened like a full-width view (rt64_split_screen.h).
++                const bool splitHalf = splitPair && (viewportOrigin == G_EX_ORIGIN_NONE) && !useWideViewport && isSplitScreenHalf(intersectionRect, fbPair.scissorRect);
++                if (splitHalf) {
++                    useWideViewport = true;
++                    splitScreenViews.fetch_add(1, std::memory_order_relaxed);
++                }
+                 // [thps-recomp] RT64_DEBUG_WIDESCREEN=N: log the widening decision of every projection, every Nth framebuffer pair.
+                 static const int debugWideEvery = getenv("RT64_DEBUG_WIDESCREEN") ? atoi(getenv("RT64_DEBUG_WIDESCREEN")) : 0;
+                 static uint64_t debugWideCounter = 0;
+@@ -1554,6 +1584,7 @@
+ 
+                     float invRatioScale = 1.0f / aspectRatioScale;
+                     int32_t horizontalMisalignment = 0;
++                    clearRect.bandsBlack = false;   // [thps-recomp] (rt64_split_screen.h)
+ 
+                     // A rect that spans the whole width of the scissor.
+                     // [thps-recomp] With the same 1/32-width slack as wide viewports: THPS1 clears its depth buffer with
+@@ -1561,6 +1592,17 @@
+                     const int32_t fillSlack = (fbPair.scissorRect.lrx - fbPair.scissorRect.ulx) / 32;
+                     if ((call.callDesc.rect.ulx <= (fbPair.scissorRect.ulx + fillSlack)) && ((call.callDesc.rect.lrx + fillSlack) >= fbPair.scissorRect.lrx)) {
+                         invRatioScale = 1.0f;
++                        // [thps-recomp] Unwidened split screen: black over the stretched rect, the fill's colour over the 4:3 area only.
++                        if (splitPairUnwidened && (p.fbStorage->colorTarget != nullptr) && (call.callDesc.rectLeftOrigin == G_EX_ORIGIN_NONE)) {
++                            clearRect.bandsBlack = true;
++                            clearRect.innerRect = convertFixedRect(call.callDesc.rect, p.resolutionScale, p.fbWidth, 1.0f / aspectRatioScale, extOriginPercentage, int32_t(p.horizontalMisalignment), call.callDesc.rectLeftOrigin, call.callDesc.rectRightOrigin);
++                            splitScreenBands.fetch_add(1, std::memory_order_relaxed);
++                        }
++                    }
++                    // [thps-recomp] A fill covering one split-screen half (a per-view clear) stretches with that half.
++                    else if (splitPair && (call.callDesc.rectLeftOrigin == G_EX_ORIGIN_NONE) && isSplitScreenHalf(call.callDesc.rect, fbPair.scissorRect)) {
++                        invRatioScale = 1.0f;
++                        splitScreenFills.fetch_add(1, std::memory_order_relaxed);
+                     }
+                     // A regular rectangle that should correct its misalignment.
+                     else {
+diff --git a/src/render/rt64_framebuffer_renderer_call.h b/src/render/rt64_framebuffer_renderer_call.h
+--- a/src/render/rt64_framebuffer_renderer_call.h
++++ b/src/render/rt64_framebuffer_renderer_call.h
+@@ -50,6 +50,10 @@
+                     RenderColor color;
+                     float depth;
+                 };
++
++                // [thps-recomp] Unwidened split screen (rt64_split_screen.h): clear rect to black, then innerRect to color.
++                RenderRect innerRect;
++                bool bandsBlack;
+             } clearRect;
+ 
+             interop::RSPVertexTestZCB vertexTestZ;
+diff --git a/src/render/rt64_projection_processor.cpp b/src/render/rt64_projection_processor.cpp
+--- a/src/render/rt64_projection_processor.cpp
++++ b/src/render/rt64_projection_processor.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "common/rt64_math.h"
+ #include "hle/rt64_workload_queue.h"
++#include "rt64_split_screen.h"
+ 
+ namespace RT64 {
+     inline void adjustProjectionMatrix(interop::float4x4 &matrix, const float aspectRatioScale) {
+@@ -97,6 +98,16 @@
+                     bool coversWholeWidth = (intersectionRect.ulx <= (fbPair.scissorRect.ulx + wideSlack)) && ((intersectionRect.lrx + wideSlack) >= fbPair.scissorRect.lrx);
+                     bool horizontalRatio = (intersectionRect.width(true, true) > intersectionRect.height(true, true));
+                     adjustAspectRatio = (viewportOrigin == G_EX_ORIGIN_NONE) && coversWholeWidth && horizontalRatio;
++                    // [thps-recomp] Split screen: a side-by-side half gets the same adjustment (rt64_split_screen.h).
++                    if (!adjustAspectRatio && (viewportOrigin == G_EX_ORIGIN_NONE) && proj.usesViewport() && isSplitScreenHalf(intersectionRect, fbPair.scissorRect)) {
++                        adjustAspectRatio = splitScreenHalves(fbPair.projectionCount, [&](uint32_t j) {
++                            const Projection &q = fbPair.projections[j];
++                            if (q.scissorRect.isNull() || !q.usesViewport()) {
++                                return FixedRect();
++                            }
++                            return q.scissorRect.intersection(drawData.rspViewports[q.transformsIndex].rect(&drawData.viewportClipRatios[q.transformsIndex * 4]));
++                        }, fbPair.scissorRect) == 3;
++                    }
+                 }
+             }
+  
+diff --git a/src/render/rt64_split_screen.h b/src/render/rt64_split_screen.h
+new file mode 100644
+--- /dev/null
++++ b/src/render/rt64_split_screen.h
+@@ -0,0 +1,76 @@
++//
++// RT64
++//
++// [thps-recomp] Split screen in widescreen. RT64 widens a 3D view (stretched viewport, widened projection) only when its
++// viewport spans the whole width of the framebuffer pair's scissor and is wider than tall. A two-player split screen draws
++// two side-by-side views, each half the width and taller than wide, so both stay in the centred 4:3 area. With
++// splitScreenWide set (the host sets it; off by default, upstream behaviour), a view that fills one side of the pair's
++// scissor up to its middle (and most of its height), in a pair that has such a view on both sides, is widened like a
++// full-width one: its viewport stretches with the frame from the left edge, so the left half covers the left half of the
++// wide frame and the right half the right one, and its projection gets the same aspect adjustment. A fill rect covering
++// such a half (a per-view clear) stretches with it.
++// With splitScreenBlackBands set (the host sets it; off by default, upstream behaviour) and splitScreenWide off (the host's
++// `split = original`), the two views stay in the 4:3 area. A colour fill across the whole
++// width (the game's frame clear, often the sky colour) would still be stretched over the side bands by the upstream rule, and
++// they would show it around the views. In such a pair the fill clears the stretched rect to black and then its own colour
++// only over the 4:3 area, so the bands are black as on a TV (splitScreenBands counts these fills).
++
++#pragma once
++
++#include <atomic>
++#include <cstdlib>
++
++#include "common/rt64_common.h"
++
++namespace RT64 {
++    extern std::atomic<bool> splitScreenWide;
++    extern std::atomic<bool> splitScreenBlackBands;
++
++    // Counters for the host's diagnostics (written by the render thread).
++    extern std::atomic<uint64_t> splitScreenViews;   // Projections widened by the split-screen rule.
++    extern std::atomic<uint64_t> splitScreenFills;   // Fill rects stretched with a split-screen half.
++    extern std::atomic<uint64_t> splitScreenBands;   // Whole-width colour fills of an unwidened split screen kept black in the side bands.
++
++    // r: a projection's scissor-viewport intersection (or a fill rect); pair: the framebuffer pair's scissor. True when r is
++    // one of two side-by-side halves: it touches the left or the right side of pair, ends near its middle, and spans at least
++    // three quarters of its height. The slack is 1/32 of the width (THPS insets its 3D scissor by 8 px of 320).
++    // The shape alone, whatever splitScreenWide says.
++    inline bool isSplitScreenHalfShape(const FixedRect &r, const FixedRect &pair) {
++        if (r.isEmpty() || pair.isEmpty()) {
++            return false;
++        }
++
++        const int32_t width = pair.lrx - pair.ulx;
++        const int32_t slack = width / 32;
++        const int32_t middle = (pair.ulx + pair.lrx) / 2;
++        const bool leftHalf = (r.ulx <= (pair.ulx + slack)) && (std::abs(r.lrx - middle) <= slack);
++        const bool rightHalf = ((r.lrx + slack) >= pair.lrx) && (std::abs(r.ulx - middle) <= slack);
++        const bool tall = (r.lry - r.uly) * 4 >= (pair.lry - pair.uly) * 3;
++        return (leftHalf != rightHalf) && tall;
++    }
++
++    inline bool isSplitScreenHalf(const FixedRect &r, const FixedRect &pair) {
++        return splitScreenWide.load(std::memory_order_relaxed) && isSplitScreenHalfShape(r, pair);
++    }
++
++    // Which halves (bit 0: left, bit 1: right) the views of a framebuffer pair cover: a projection is only widened by the split-screen rule
++    // when the pair has both (two side-by-side views), so a lone half-width 3D viewport (a model on a menu screen) keeps the upstream rule.
++    // rectOf(i): projection i's scissor-viewport intersection, or an empty rect for one that has no viewport.
++    // anyWide: count the halves whatever splitScreenWide says (the black side bands of an unwidened split screen).
++    template<typename RectOf>
++    inline uint32_t splitScreenHalves(uint32_t projectionCount, RectOf rectOf, const FixedRect &pair, bool anyWide = false) {
++        uint32_t mask = 0;
++        if (!anyWide && !splitScreenWide.load(std::memory_order_relaxed)) {
++            return mask;
++        }
++
++        for (uint32_t i = 0; i < projectionCount; i++) {
++            const FixedRect r = rectOf(i);
++            if (isSplitScreenHalfShape(r, pair)) {
++                mask |= ((r.ulx + r.lrx) < (pair.ulx + pair.lrx)) ? 1U : 2U;
++            }
++        }
++
++        return mask;
++    }
++};

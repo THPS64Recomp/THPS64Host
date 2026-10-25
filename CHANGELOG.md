@@ -10,6 +10,17 @@ release, the release lists it under a **Games must** heading.
 ### Added
 - Tests: `present_cmp`, a step that compares two screenshots taken in the same test. It can check the whole picture or
   only the widescreen side bands, and it can ignore spots that animate on their own.
+- Two-player split screens in widescreen: a new RT64 patch (`rt64-splitscreen-widescreen.patch`) widens a pair of side-by-side
+  views like a full-width one, and HUD placement puts each player's HUD block at its own view's edge (with HUD Placement
+  `original` too: the views fill the picture there). 4:3 is unchanged. The runtime needs the new patch: `setup_runtime.py`
+  applies it on top of an existing tree.
+- Graphics setting `split = wide | original` (default `wide`), the menu row Graphics > Two-Player Split Screen and
+  `--split wide|original`: `original` keeps both views in the 4:3 area with black side bands (the RT64 patch keeps the
+  game's whole-width frame clear out of them), and each player's HUD stays where the game draws it, inside its view, whatever
+  HUD Placement says. The control command `split [on|off]` switches it for one run (A/B) and
+  prints the counters (`kept`: split-screen frames left at the game's own HUD placement; `bands`: fills kept out of the side
+  bands). Test step `present_bands_clear`
+  and the shared session `two-players-169-splitorig` (`tests/hud_sessions.py`).
 
 ## [0.1.0] - 2026-10-18
 

@@ -56,6 +56,7 @@ int64_t clock_ticks() { return std::chrono::steady_clock::now().time_since_epoch
 
 std::string gfx_aspect() { return thps::gfx.aspect; }
 std::string gfx_hud() { return thps::gfx.hud; }
+std::string gfx_split() { return thps::gfx.split_wide ? "wide" : "original"; }
 std::string gfx_msaa() { return std::to_string(thps::gfx.msaa); }
 std::string gfx_window() { return thps::gfx.fullscreen ? "fullscreen" : "windowed"; }
 std::string gfx_res_scale() { return std::to_string(thps::gfx.res_scale); }
@@ -181,6 +182,7 @@ void build_models(Rml::Context* ctx) {
         bind_string(c, "aspect", gfx_aspect, [](const std::string& v) { gfx_changed("aspect", v); });
         bind_string(c, "hud", gfx_hud, [](const std::string& v) { gfx_changed("hud", v); });
         c.BindFunc("show_hud", [](Rml::Variant& v) { v = thps::hud_supported(); });
+        bind_string(c, "split", gfx_split, [](const std::string& v) { gfx_changed("split", v); });
         bind_string(c, "msaa", gfx_msaa, [](const std::string& v) { gfx_changed("msaa", v); });
         bind_string(c, "window_mode", gfx_window, [](const std::string& v) { gfx_changed("fullscreen", v == "fullscreen" ? "1" : "0"); });
         bind_string(c, "res_scale", gfx_res_scale, [](const std::string& v) { gfx_changed("res_scale", v); });

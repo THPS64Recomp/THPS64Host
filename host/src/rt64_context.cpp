@@ -292,8 +292,9 @@ public:
             uc.aspectRatio = AR::Original;
         }
         // HUD placement (src/hud_anchor.cpp): RT64 moves the extended-alignment (LEFT / RIGHT origin) draws to the edges of
-        // this aspect; draws without alignment (everything the host doesn't anchor) are unaffected.
-        if (thps::hud_supported() && thps::gfx.hud == "expand") {
+        // this aspect; draws without alignment (everything the host doesn't anchor) are unaffected. `original` aligns nothing for one
+        // player, but places a two-player split screen's HUD at the edges of the widened views, like `expand`: the window's picture.
+        if (thps::hud_supported() && (thps::gfx.hud == "expand" || thps::gfx.hud == "original")) {
             uc.extAspectRatio = AR::Expand;
         } else if (thps::hud_supported() && thps::gfx.hud == "16:9") {
             uc.extAspectRatio = AR::Manual;

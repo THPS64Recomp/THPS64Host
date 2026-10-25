@@ -784,6 +784,83 @@ class Session:
                 raise StepFail(f"{path.name}: {magenta} magenta (uncleared) pixels at the right edge")
             if frac > max_black:
                 raise StepFail(f"{path.name}: {frac:.1%} of the side bands is unrendered (max {max_black:.0%})")
+        elif kind == "present_same":
+            # ("present_same", NAME_A, NAME_B, MAX_FRAC): two kept present captures (keep_present) of a paused frame differ in at most MAX_FRAC
+            # of their pixels (sum of |RGB| differences > 24): an A/B switch that must not change the picture (split screen at 4:3).
+            _, na, nb, max_frac = st
+            a, b = H.read_png(self.out / f"{na}.png"), H.read_png(self.out / f"{nb}.png")
+            if (a.w, a.h) != (b.w, b.h):
+                raise StepFail(f"{na}.png {a.w}x{a.h} vs {nb}.png {b.w}x{b.h}")
+            n = d = 0
+            for y in range(0, a.h, 2):
+                for x in range(0, a.w, 2):
+                    n += 1
+                    if sum(abs(i - j) for i, j in zip(a.px(x, y), b.px(x, y))) > 24:
+                        d += 1
+            self.notes.append(f"{na} vs {nb}: {d / n:.3%} of pixels differ")
+            if d / n > max_frac:
+                raise StepFail(f"{na}.png and {nb}.png differ in {d / n:.2%} of pixels (max {max_frac:.2%})")
+        elif kind == "present_split":
+            # ("present_split", SIZE, MIN_FRAC): two-player split screen in widescreen. Newest present capture (after this step started): the
+            # expected size, and in EACH side band outside the central 4:3 area (left and right separately) at least MIN_FRAC of the columns hold
+            # rendered pixels (not exactly black in more than 5 % of the column's rows), i.e. the left view reaches the left edge and the right view
+            # the right edge. Column-based, because a split view can have large dark areas (the Warehouse ceiling) that a pixel count would miss.
+            _, size, min_frac = st
+            pdir = self.out / "present"
+            t_start = time.monotonic()
+            before = set(pdir.glob("present_*.png")) if pdir.exists() else set()
+            new = []
+            while not new:
+                if time.monotonic() - t_start > 30 * self.slow:
+                    raise StepFail(f"no new present capture in {pdir}")
+                time.sleep(0.5)
+                new = sorted(set(pdir.glob("present_*.png")) - before)
+            path = self._captures_until_now()[-1]   # the frame composited now, not an older one a lagging writer just finished
+            img = H.read_png(path)
+            if f"{img.w}x{img.h}" != size:
+                raise StepFail(f"{path.name}: {img.w}x{img.h}, expected {size}")
+            core = img.h * 4 // 3
+            x0 = (img.w - core) // 2
+            mx, my = img.w // 40, img.h // 40
+            rows = range(my, img.h - my, 4)
+
+            def drawn(x):
+                lit = sum(1 for y in rows if img.px(x, y) != (0, 0, 0))
+                return lit > 0.05 * len(rows)
+            bands = {"left": range(mx, x0, 2), "right": range(x0 + core, img.w - mx, 2)}
+            fracs = {k: sum(1 for x in xs if drawn(x)) / max(len(xs), 1) for k, xs in bands.items()}
+            self.notes.append(f"present {path.name}: side-band columns drawn left {fracs['left']:.0%} right {fracs['right']:.0%}")
+            if not bands["left"]:
+                raise StepFail(f"{path.name}: no side bands (a 4:3 frame?)")
+            for k, f in fracs.items():
+                if f < min_frac:
+                    raise StepFail(f"{path.name}: only {f:.0%} of the {k} side band's columns are drawn (min {min_frac:.0%})")
+        elif kind == "present_bands_clear":
+            # ("present_bands_clear", SIZE, MAX_FRAC): two-player split screen with split = original. Newest present capture (as present_split):
+            # the expected size, and in EACH side band outside the central 4:3 area at most MAX_FRAC of the columns are not black (a channel
+            # above 16 in at least two sampled rows). The bands are black as on a TV: no HUD (each player's HUD stays with its view in the 4:3
+            # middle) and no clear colour (2026-10-25 play test: THPS2's sky blue filled the bands, and player 1's block and player 2's digits
+            # and meter sat at the window's edges).
+            _, size, max_frac = st
+            path = self._captures_until_now()[-1]
+            img = H.read_png(path)
+            if f"{img.w}x{img.h}" != size:
+                raise StepFail(f"{path.name}: {img.w}x{img.h}, expected {size}")
+            core = img.h * 4 // 3
+            x0 = (img.w - core) // 2
+            mx, my = img.w // 80, img.h // 40
+            rows = range(my, img.h - my, 2)
+
+            def bright(x):
+                return sum(1 for y in rows if max(img.px(x, y)) > 16) >= 2
+            bands = {"left": range(mx, x0 - mx), "right": range(x0 + core + mx, img.w - mx)}
+            if not bands["left"]:
+                raise StepFail(f"{path.name}: no side bands (a 4:3 frame?)")
+            fracs = {k: sum(1 for x in xs if bright(x)) / max(len(xs), 1) for k, xs in bands.items()}
+            self.notes.append(f"present {path.name}: side-band columns not black left {fracs['left']:.1%} right {fracs['right']:.1%}")
+            for k, f in fracs.items():
+                if f > max_frac:
+                    raise StepFail(f"{path.name}: {f:.1%} of the {k} side band's columns are not black (max {max_frac:.1%}): a HUD or the clear colour outside the views?")
         elif kind == "max_frame":
             # The checkpoint just matched was reached within N displayed frames of boot.
             frame = int(self.inst.stats()["frames"])
@@ -955,9 +1032,16 @@ class Session:
             if not lo <= frac <= hi:
                 raise StepFail(f"{na}.png vs {nb}.png: {frac:.3%} of pixels differ (expected {lo:.3%} .. {hi:.3%})")
         elif kind == "keep_present":
-            # Copy the newest present capture (session present_every) to <out>/<name>.png (evidence).
+            # ("keep_present", NAME[, "now"]): copy the newest present capture (session present_every) to <out>/<name>.png (evidence).
+            # "now": the newest up to the frame composited now, once the writer threads have caught up (_captures_until_now). On a loaded
+            # machine the newest file on disk can be seconds old (2026-10-19: a paused-frame A/B got the course-select screen from before
+            # the level). Not the default: the wait can take seconds, and a step after it that looks at an animation (hud-special's
+            # poked meter, which fades) would then see later frames.
             time.sleep(1.0)
-            ps = sorted((self.out / "present").glob("present_*.png"))
+            if len(st) > 2 and st[2] == "now":
+                ps = self._captures_until_now()
+            else:
+                ps = sorted((self.out / "present").glob("present_*.png"))
             if not ps:
                 raise StepFail("no present capture yet")
             shutil.copyfile(ps[-1], self.out / f"{st[1]}.png")

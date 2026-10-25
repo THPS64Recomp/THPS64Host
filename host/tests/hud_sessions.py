@@ -8,6 +8,7 @@ hud_sessions(to_level, *, pause_menu, end_run, view_goals) builds, from the game
                goals page, level, trick, pause, goals from the pause menu (THPS3), the end-of-run pages; run by name.
   hud-dbg      optin: `--hud-debug`: one log line per anchored group
 `to_level`: steps from boot to the first in-level frame (the level's goals page -> in_level). The menu-hud session is in menu_session.py.
+two_players_split_original(to_level) builds two-players-169-splitorig for all three games (split original: each HUD stays with its view).
 """
 
 WIDE = ["--window", "1280x720", "--res-scale", "2", "--msaa", "4", "--hidden"]
@@ -138,3 +139,24 @@ def hud_sessions(to_level, *, pause_menu, end_run, view_goals=None, boot=(), cou
         ]),
     ]))
     return sessions
+
+
+def two_players_split_original(to_level, *, win="1280x720"):
+    """two-players-169-splitorig: two players at 16:9 with `--split original` and the default HUD placement (`expand`), from the game's own
+    two-player steps (boot to the split-screen level). Both views stay in the 4:3 middle, so each player's HUD keeps the game's own placement:
+    the `split` counters count those tasks (`kept`) and place no group (q0-q4, centred all 0), and the side bands are black
+    (`present_bands_clear`: no HUD block at the window's edges, no clear colour; `bands` counts the whole-width fills the RT64 patch kept out
+    of them). The 2026-10-25 play test found the one-player rules running there (player 1's block at the window's left edge, player 2's SCORE
+    label in the middle and its digits and meter at the right edge) and, in THPS2, the sky colour filling the bands. Shared by THPS1-3."""
+    return dict(name="two-players-169-splitorig", config="two-players-169-splitorig-config", fresh_pak=True, wav=False, present_every=10,
+                args=["--skip-intro", "--hidden", "--aspect", "16:9", "--window", win, "--res-scale", "2", "--split", "original", "--hud", "expand"],
+                scenarios=[
+        ("two_players_169_splitorig", "two players at 16:9, split original, hud expand: black side bands, each HUD block with its view in the 4:3 middle", [
+            *to_level,
+            ("wait", 60),
+            ("present_bands_clear", win, 0.02),
+            ("keep_present", "two_players_169_splitorig", "now"),
+            ("ctl_match", "split", r"wide=0 .* groups q0=0 q1=0 q2=0 q3=0 q4=0 centred=0 kept=[1-9]\d* bands=\d+"),
+            ("ctl_match", "hud", r"mode=expand "),
+        ]),
+    ])
