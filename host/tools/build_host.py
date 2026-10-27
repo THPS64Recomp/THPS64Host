@@ -111,6 +111,21 @@ def shared_runtime_ready(d):
     return os.path.isdir(os.path.join(d, "ui-fonts"))
 
 
+def runtime_of_last_build():
+    """The runtime folder an earlier build of this game used (RECOMP_RUNTIME_DIR in its CMake cache), when it is set up for this
+    host. tools/check.sh builds in its own folder without --runtime: this lets it reuse your build's runtime instead of fetching
+    another one (about 850 MB)."""
+    for b in ("cmake", "cmake-split"):
+        try:
+            with open(os.path.join(HOST, "build", b, "CMakeCache.txt"), encoding="utf-8", errors="replace") as f:
+                d = next((line.split("=", 1)[1].strip() for line in f if line.startswith("RECOMP_RUNTIME_DIR:")), "")
+        except OSError:
+            continue
+        if d and shared_runtime_ready(d):
+            return d
+    return None
+
+
 def step_runtime(work, shared=None):
     say("1/6 pinned N64ModernRuntime + RT64 + our patches")
     if shared:
@@ -310,7 +325,12 @@ def main():
         hostenv.rmtree(os.path.abspath(args.build_dir) if args.build_dir else default_build_dir(args.split))
     os.makedirs(work, exist_ok=True)
     check_tools()
-    runtime = step_runtime(work, args.runtime and os.path.abspath(os.path.expanduser(args.runtime)))
+    shared = args.runtime and os.path.abspath(os.path.expanduser(args.runtime))
+    if not shared and not os.path.isdir(os.path.join(work, "runtime")):
+        shared = runtime_of_last_build()
+        if shared:
+            print(f"no --runtime given: reusing the runtime of your last build, {shared} (set THPS_RUNTIME_DIR or --runtime to choose one)")
+    runtime = step_runtime(work, shared)
     extra = step_sdl2(work) if args.own_sdl2 else []
     if args.split:
         step_recomp_tools(work)   # bundled into the dev resources/ (THPS_TOOLS_DIR defaults to <work>/N64Recomp/build)
@@ -319,7 +339,7 @@ def main():
         binary = step_cmake(runtime, False, args.build_type, args.jobs, split=True, extra=extra, build=args.build_dir and os.path.abspath(args.build_dir))
         say("done")
         print(f"split engine: {binary}")
-        print(f'first run: "{binary}" --rom "<your ROM>"   |   tests: tools/test.sh --first-run')
+        print(f'first run: "{binary}" --rom "<your ROM>"   |   tests: decomp/{FAMILY}/recomp-host/tools/test.sh --first-run')
         return
     if not args.stub:
         n64recomp = step_recomp_tools(work)
@@ -333,7 +353,8 @@ def main():
     print(f"host: {binary}")
     if not args.stub:
         print(f'play:  "{binary}" --rom "<your ROM>"     (the ROM is stored in the config folder, later runs need no --rom)')
-        print("check: python -I tests/controls_cfg_test.py   |   full suite: python -I tests/run.py --record   (see docs/WINDOWS-TEST.md)")
+        print(f"tests: decomp/{FAMILY}/recomp-host/tools/test.sh --record   (the first time on a machine; on Windows run it in Git Bash."
+              ' See BUILDING.md, "Tests")')
 
 
 if __name__ == "__main__":

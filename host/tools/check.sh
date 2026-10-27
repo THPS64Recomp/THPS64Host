@@ -232,11 +232,12 @@ dumps and their SHA-1s are in the game's README."
     fi
 
     # 3. The build with stand-in game functions (no ROM). Its own build dir, so a real build in build/cmake is never replaced.
-    step "build with stand-in game functions (build/cmake-check; the first run fetches the pinned runtime and takes a while)"
+    step "build with stand-in game functions (build/cmake-check; without a runtime to reuse, it first fetches the pinned one, which takes a while)"
     log=$H/build/check-build.log
     mkdir -p "$H/build"
     if $PY -I "$H/tools/build_host.py" --stub --build-type Release --build-dir "$H/build/cmake-check" ${THPS_RUNTIME_DIR:+--runtime "$THPS_RUNTIME_DIR"} ${CHECK_JOBS:+-j "$CHECK_JOBS"} >"$log" 2>&1; then
         ok "built (log: $log)"
+        rt=$(grep -m1 "reusing the runtime of your last build" "$log") && echo "   note: ${rt#no --runtime given: }"
         EXE=$H/build/cmake-check/${G}_recomp
         [ -f "$EXE.exe" ] && EXE=$EXE.exe
 

@@ -357,10 +357,10 @@ def load_info() -> dict:
     if hasattr(os, "getloadavg"):
         la = os.getloadavg()
         up = subprocess.run(["uptime"], capture_output=True, text=True).stdout.strip()
-        return {"uptime": up, "load1": la[0], "load5": la[1], "ncpu": ncpu, "overloaded": la[0] > 2 * ncpu}
-    # Windows has neither: record the machine instead (no load warning).
-    return {"uptime": f"{platform.platform()} ({platform.processor() or platform.machine()}, {ncpu} CPUs)", "load1": 0.0, "load5": 0.0,
-            "ncpu": ncpu, "overloaded": False}
+        return {"uptime": up, "load": f"{la[0]:.1f}", "load1": la[0], "load5": la[1], "ncpu": ncpu, "overloaded": la[0] > 2 * ncpu}
+    # Windows has neither: say so, and record the machine instead (no load warning). "load" is the text the notes print.
+    return {"uptime": f"load n/a ({platform.platform()}, {platform.processor() or platform.machine()}, {ncpu} CPUs)", "load": "n/a",
+            "load1": 0.0, "load5": 0.0, "ncpu": ncpu, "overloaded": False}
 
 
 def write_png(path: Path, img: Image):

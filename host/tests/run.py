@@ -22,6 +22,7 @@ under build/ (gitignored).
 from __future__ import annotations
 
 import argparse
+import array
 import hashlib
 import json
 import os
@@ -72,23 +73,66 @@ def ref_chain() -> list[Path]:
     return dirs
 
 
+def own_refs() -> set[str]:
+    """Checkpoints whose screen differs on the version under test (scenarios.py OWN_REFS, by version id). They need a reference of
+    that version's own: one from the release it falls through to (refs_from) is never used for them, and --record captures them."""
+    return set(getattr(S, "OWN_REFS", {}).get(VERSION.name, ()))
+
+
 def find_ref(cp: str) -> Path | None:
-    for d in ref_chain():
+    for d in ([REFS] if cp in own_refs() else ref_chain()):
         if (d / f"{cp}.png").exists():
             return d / f"{cp}.png"
     return None
 
 
+def rom_var() -> str:
+    """The environment variable naming the dump of the version under test: THPS1_ROM, or for another release THPS1_ROM_EU,
+    THPS1_ROM_US10, ... (as the first-run test names them) when that one is set."""
+    return ver_var() if os.environ.get(ver_var()) else BASE_VERSION.upper() + "_ROM"
+
+
+def ver_var() -> str:
+    """The variable for the version under test's own dump: THPS1_ROM for the first release, THPS1_ROM_EU for Europe, ..."""
+    return BASE_VERSION.upper() + "_ROM" + ("" if VERSION.name == BASE_VERSION else "_" + VERSION.name[len(BASE_VERSION) + 1:].upper())
+
+
 def default_rom() -> str:
-    """$THPS<N>_ROM, else roms/<one of the version's rom_names> in the nearest parent dir that has it
+    """$THPS<N>_ROM (rom_var), else roms/<one of the version's rom_names> in the nearest parent dir that has it
     (the main checkout when run from a worktree under .worktrees/)."""
-    if os.environ.get(BASE_VERSION.upper() + "_ROM"):
-        return os.environ[BASE_VERSION.upper() + "_ROM"]
+    if os.environ.get(rom_var()):
+        return os.environ[rom_var()]
     for d in Path(__file__).resolve().parents:
         for name in VERSION.rom_names:
             if (d / "roms" / name).exists():
                 return str(d / "roms" / name)
     return ""
+
+
+def rom_problem(path: str, source: str) -> str:
+    """What is wrong with the suite's ROM, in words a contributor can act on ('' when it is a dump of the version under test).
+    `source` names where the path came from: "--rom", an environment variable, or "" (found in roms/)."""
+    if not path:
+        return f"no ROM: set {ver_var()} to your dump of {VERSION.display_name}, or pass --rom"
+    p = Path(path)
+    if not p.is_file():
+        hint = " In Git Bash, write the Windows path: C:/path/to/dump.z64" if os.name == "nt" and path.startswith("/") else ""
+        return f"{source + ' ' if source else ''}{path}: no such file.{hint}"
+    b = p.read_bytes()
+    swap = {bytes.fromhex("40123780"): "I", bytes.fromhex("37804012"): "H"}.get(b[:4])   # .n64 (32-bit words reversed), .v64 (16-bit)
+    if swap and len(b) % 4 == 0:
+        a = array.array(swap, b)
+        a.byteswap()
+        b = a.tobytes()
+    sha = hashlib.sha1(b).hexdigest()
+    if sha == VERSION.rom_sha1:
+        return ""
+    other = next((v for v in thpsgame.versions(BASE_VERSION) if v.rom_sha1 == sha), None)
+    if other:
+        return (f"{path} is {other.display_name}, but this run tests {VERSION.display_name}."
+                f" Pass --version {other.name}, or " + (f"set {ver_var()} to your {VERSION.display_name} dump." if source.isupper()
+                                                         else f"pass your {VERSION.display_name} dump with --rom."))
+    return f"{path} is not a dump of {VERSION.display_name} (SHA-1 {sha}; the game's README lists the supported dumps)."
 
 
 class StepFail(Exception):
@@ -167,6 +211,9 @@ class Session:
             return True, 0.0
         ref_p = find_ref(cp)
         if ref_p is None:
+            if cp in own_refs():
+                raise StepFail(f"no reference for '{cp}' ({REFS / (cp + '.png')}): this screen differs on {VERSION.name}, so it needs its own."
+                               f" Record it: tools/test.sh --version {VERSION.name} --record")
             raise StepFail(f"no reference for '{cp}' ({REFS / (cp + '.png')}); run with --record first")
         ref = _ref_cache.get(cp) or _ref_cache.setdefault(cp, H.read_png(ref_p))
         worst = max(H.region_ratio(img, ref, spec) for spec in c["regions"])
@@ -218,7 +265,7 @@ class Session:
     def have_ref(self, cp: str) -> bool:
         if not S.CHECKPOINTS[cp]["regions"]:   # size-only checkpoints need none
             return True
-        if cp in RERECORD:   # --rerecord-cp: only this version's own file counts
+        if cp in RERECORD or cp in own_refs():   # --rerecord-cp, OWN_REFS: only this version's own file counts
             return (REFS / f"{cp}.png").exists()
         return find_ref(cp) is not None
 
@@ -252,8 +299,24 @@ class Session:
             _, button, from_cp, to_cp = st[:4]
             timeout = st[4] if len(st) > 4 else 60
             if self.record and not self.have_ref(to_cp):
+                settle = S.CHECKPOINTS[to_cp]["record"][1]
                 self.inst.press(button, timeout=60 * self.slow)
-                self.inst.wait_frames(S.CHECKPOINTS[to_cp]["record"][1], timeout=120 * self.slow)
+                if to_cp in own_refs() and from_cp and S.CHECKPOINTS[from_cp]["regions"] and settle > 45:
+                    # A version's own screen: its game may ignore the first press (THPS2 Europe's logo screen takes START later than
+                    # USA's, so a capture 90 frames after one press was the logo screen again). Re-press while the screen still shows
+                    # from_cp, as a normal run does, then settle from the press that worked.
+                    presses = 1
+                    while True:
+                        self.inst.wait_frames(45, timeout=120 * self.slow)
+                        img, _ = self.shot()
+                        if not self.match(img, from_cp)[0] or presses >= GAME.get("press_limit", 8):
+                            break
+                        self.inst.press(button, timeout=60 * self.slow)
+                        presses += 1
+                    if presses > 1:
+                        self.notes.append(f"record {to_cp}: {button} {from_cp}->{to_cp}: {presses} presses")
+                    settle -= 45
+                self.inst.wait_frames(settle, timeout=120 * self.slow)
                 self.record_ref(to_cp)
                 return
             # Press, then poll for to_cp. Re-press only while the screen still shows from_cp
@@ -697,7 +760,7 @@ class Session:
             got = {k: float(r.get(f"{k}_ms_max", "nan")) for k in st[2]}
             if len(st) > 3:   # ("ftime_max", FILE, LIMITS, KEY): also keep the values for an ftime_median step
                 self.__dict__.setdefault("ftime_kept", {}).setdefault(st[3], []).append(got)
-            self.notes.append("ftime_max: " + " ".join(f"{k}={v:.1f}ms(<{st[2][k]})" for k, v in got.items()) + f"; load {load['load1']:.1f}")
+            self.notes.append("ftime_max: " + " ".join(f"{k}={v:.1f}ms(<{st[2][k]})" for k, v in got.items()) + f"; load {load['load']}")
             bad = [f"{k} {v:.1f} ms >= {st[2][k]}" for k, v in got.items() if not v < st[2][k]]
             if bad:
                 msg = "ftime_max: longest interval " + ", ".join(bad)
@@ -713,7 +776,7 @@ class Session:
                 raise StepFail(f"ftime_median: no values kept under {st[1]}")
             med = vals[len(vals) // 2] if len(vals) % 2 else (vals[len(vals) // 2 - 1] + vals[len(vals) // 2]) / 2
             load = H.load_info()
-            self.notes.append(f"ftime_median {st[1]}: {st[2]} {med:.1f} ms of {[round(v, 1) for v in vals]} (< {st[3]}); load {load['load1']:.1f}")
+            self.notes.append(f"ftime_median {st[1]}: {st[2]} {med:.1f} ms of {[round(v, 1) for v in vals]} (< {st[3]}); load {load['load']}")
             if not med < st[3]:
                 msg = f"ftime_median: {st[2]} median {med:.1f} ms >= {st[3]} ({[round(v, 1) for v in vals]})"
                 if load["overloaded"]:
@@ -800,7 +863,7 @@ class Session:
                 raise StepFail("fps: no perf samples")
             med = statistics.median(samples)
             load = H.load_info()
-            self.notes.append(f"fps: median {med:.1f}, min {min(samples):.1f} over {len(samples)} s; load {load['load1']:.1f}")
+            self.notes.append(f"fps: median {med:.1f}, min {min(samples):.1f} over {len(samples)} s; load {load['load']}")
             if med < min_med:
                 msg = f"fps: median {med:.1f} < {min_med}"
                 if load["overloaded"]:
@@ -1426,10 +1489,16 @@ def main() -> int:
     ap.add_argument("--keep", type=int, default=10, help="keep the newest N output dirs (default 10)")
     args = ap.parse_args()
     use_version(args.version)
+    source = "--rom"
     if args.rom is None:
+        source = rom_var() if os.environ.get(rom_var()) else ""
         args.rom = default_rom()
     if args.check_refs:
         return check_refs()
+    problem = rom_problem(args.rom, source)
+    if problem:
+        print(f"error: {problem}", file=sys.stderr)
+        return 2
 
     if not H.BINARY.exists():
         print(f"error: {H.BINARY} not built", file=sys.stderr)

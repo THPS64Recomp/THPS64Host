@@ -64,6 +64,15 @@ release, the release lists it under a **Games must** heading.
   mode). Its output is unchanged.
 - The game library ABI is now 5 (4: the import table gains `thps_memset` and `thps_memcpy`; 5: the games import the
   draw-distance hooks). A library built by an earlier release is rebuilt once at the next start.
+- Tests: a game can list the checkpoints whose screen differs on another release (`OWN_REFS` in its `tests/scenarios.py`).
+  That release then never uses the first release's picture for them, and `test.sh --version ID --record` records its own.
+  When the game ignores the first press on the way to such a screen, the recording presses again, as a normal run does.
+- Tests: `test.sh` and `tests/run.py` check the ROM before starting: that the file exists, and that it is the release under
+  test. `--version thps1_eu` also reads `THPS1_ROM_EU` (and so on), as the first-run test does. In Git Bash a
+  `/c/...` path in `THPS<N>_ROM` is converted for the game.
+- Tests: on Windows the notes say "load n/a" instead of a load of 0.0.
+- `build_host.py` without `--runtime` reuses the runtime folder of your last build, so `tools/check.sh` doesn't set up a
+  second one. Its closing hint names `tools/test.sh`, and `test.sh --first-run` says how to build the split engine.
 
 ### Fixed
 - THPS2/3: the east-button split (flip while skating, back in menus) turned off as soon as `controls.cfg` stopped
@@ -73,6 +82,8 @@ release, the release lists it under a **Games must** heading.
 - Tests: the `menu` step checks the screen every 8 frames instead of every 9. The games rotate three framebuffers,
   so a check every 9 frames always read the same one, and when that one copy was out of date (THPS2 Europe, NY City,
   draw distance Full) the test missed a pause menu that was on screen. It failed about one run in three.
+- Tests: the first-run test `picker_bypass` gives the game 8 s on Windows, as `app_update` does. On a slower PC the game
+  could still be starting at the 3 s limit, and the run then exits 1.
 
 ### Games must
 - Rebuild their game library: `THPS_GAME_ABI` is 5 (the draw-distance hooks in `game_hooks.def`).

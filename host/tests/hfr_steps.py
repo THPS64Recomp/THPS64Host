@@ -232,7 +232,7 @@ def step(sess, st: tuple):
         load = H.load_info()
         inst.send("ids slow")
         sess.notes.append("benchslow " + mode + " " + inst.expect("ok ids slow", 30))
-        sess.notes.append("bench " + mode + " load1=" + str(load.get("load1")) + " " + " ".join(f"{k}={v}" for k, v in r.items()))
+        sess.notes.append("bench " + mode + " load=" + load["load"] + " " + " ".join(f"{k}={v}" for k, v in r.items()))
     elif kind == "hfr_hole":
         _, seconds = st
         d = sess.out / "hfr_hole"
