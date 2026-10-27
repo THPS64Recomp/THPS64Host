@@ -27,6 +27,7 @@ bool hfr_arg(int argc, char** argv, int& i);
 bool hud_supported();                      // the game's HUD placement is implemented (game.toml hud_placement)
 bool hud_active();                         // placement is on right now (hud != original, widescreen, supported; or a widened split screen)
 void hud_set_mode(bool on, bool split_on); // gfx_config.cpp publish(): placement on (hud != original, widescreen, supported); split-screen placement on (widescreen)
+bool hud_placement_on();                   // what hud_set_mode last set (one-player placement), for the start line's published state
 void hud_task_begin(RT64::State* state, const uint8_t* rdram, uint32_t dl_address);
 void hud_task_end(RT64::State* state);
 void hud_command(RT64::State* state, uint32_t w0, uint32_t w1);

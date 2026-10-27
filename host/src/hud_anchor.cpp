@@ -305,6 +305,7 @@ namespace thps {
 bool hud_supported() { return game::hud_placement; }
 
 bool hud_active() { return g_enabled.load() || g_split_active.load(); }
+bool hud_placement_on() { return g_enabled.load(); }
 
 void hud_set_mode(bool on, bool split_on) {
     g_enabled = on && hud_supported();
@@ -438,12 +439,13 @@ bool hud_arg(int argc, char** argv, int& i) {
 }
 
 std::string hud_report() {
-    char buf[300];
+    char buf[400];
     std::snprintf(buf, sizeof buf, "mode=%s supported=%d tasks_anchored=%" PRIu64 " groups left=%" PRIu64 " centre=%" PRIu64 " right=%" PRIu64
-                  " overlay_tasks=%" PRIu64 " last_task left=%" PRIu64 " centre=%" PRIu64 " right=%" PRIu64 " fills left=%" PRIu64 " centre=%" PRIu64 " right=%" PRIu64,
+                  " overlay_tasks=%" PRIu64 " last_task left=%" PRIu64 " centre=%" PRIu64 " right=%" PRIu64 " fills left=%" PRIu64 " centre=%" PRIu64 " right=%" PRIu64
+                  " enabled=%d split_enabled=%d",
                   gfx.hud.c_str(), int(hud_supported()), g_tasks_anchored.load(), g_groups[kLeft].load(), g_groups[kCentre].load(), g_groups[kRight].load(),
                   g_overlay_tasks.load(), g_last_task_groups[kLeft].load(), g_last_task_groups[kCentre].load(), g_last_task_groups[kRight].load(),
-                  g_fills[kLeft].load(), g_fills[kCentre].load(), g_fills[kRight].load());
+                  g_fills[kLeft].load(), g_fills[kCentre].load(), g_fills[kRight].load(), int(g_enabled.load()), int(g_split_enabled.load()));
     return buf;
 }
 
