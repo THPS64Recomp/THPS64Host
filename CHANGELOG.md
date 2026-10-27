@@ -7,6 +7,11 @@ release, the release lists it under a **Games must** heading.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-27
+
+Split screen, Picture Border, rebinding, draw distance and the Original and Enhanced presets, used by the v0.2 releases of
+all three games.
+
 ### Added
 - Tests: `present_cmp`, a step that compares two screenshots taken in the same test. It can check the whole picture or
   only the widescreen side bands, and it can ignore spots that animate on their own.
@@ -137,5 +142,6 @@ The first release, used by THPS1 64: Recompiled v0.1.0 and the THPS2 and THPS3 v
   (`ultramodern-sp-complete-after-dl.patch`).
 - Windows: the settings migration was never saved, and the frame-interpolation time budget never applied.
 
-[Unreleased]: https://github.com/THPS64Recomp/THPS64Host/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/THPS64Recomp/THPS64Host/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/THPS64Recomp/THPS64Host/releases/tag/v0.2.0
 [0.1.0]: https://github.com/THPS64Recomp/THPS64Host/releases/tag/v0.1.0
