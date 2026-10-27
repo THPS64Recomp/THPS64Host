@@ -58,8 +58,31 @@ release, the release lists it under a **Games must** heading.
   exactly. It is read at start-up, so a change needs a restart. Games supply the hooks in `game/draw_distance.cpp`. A
   game without it still builds, and the setting then changes nothing.
 - Control command `dltrace N`: trace the display lists of the next N frames. `dltrace` alone still traces one.
+- Graphics setting `fog = original | soft | off` (default `original`) in `graphics.cfg` and `--fog`. It is not in the
+  menu or a preset: in playtesting it made little visible difference, and at Full draw distance Soft equals the game's
+  fog. The games' fog is thin by design: they write one fixed fog command each frame with the steepest ramp the N64
+  allows, over about the last 13 % of the view at the game's draw distance. `soft` starts the ramp at 70 % of the far
+  plane in use, so distant scenery fades in instead of popping in; it is never steeper than the game's ramp, so it only
+  adds fog, and at long draw distances (Full) the game's own ramp stays. `off` turns it off, which shows a long draw
+  distance most clearly. Done in the display list (`src/fog.cpp`): only the game's exact fog command is rewritten, so
+  menus, the HUD and the sky are unaffected, and no RT64 change is needed. The control command `fog original|soft|off
+  [START]` switches it for one run and prints the counters.
 
 ### Changed
+- Frame Rate (`refresh` in `graphics.cfg`, `--refresh`, the Graphics tab) is now `original` (30) or `60`, default `60`; `display`
+  and 120 are gone, because 120 Hz (what "Match display" gave on a ProMotion Mac) paced badly. `graphics.cfg` revision 3: a file
+  from before it with `refresh=display` or another rate moves to 60 once, with a log line. Measurements can still ask for another
+  rate with `THPS_TEST_REFRESH=display|N` (environment, not saved).
+- Graphics presets: a Preset row at the top of the Graphics tab, `--preset original|enhanced`. Original is the N64 look
+  (aspect, HUD, split and border `original`, frame rate 30, draw distance `original`); Enhanced is 16:9, HUD `expand`,
+  split `wide`, border `fill`, 60 and draw distance `full`. Choosing one sets and saves those six rows; the menu
+  shows Custom when they match neither. The preset is read back from the values, never stored. **Enhanced is the new default**
+  for a fresh config: `border` now defaults to `fill` and `draw_distance` to `full`, and `draw_distance` is
+  always written. An existing
+  `graphics.cfg` keeps every value it has; a key it lacks takes the new default. Tests: the harness adds the old defaults
+  (`harness.TEST_GFX_DEFAULTS`: 16:9, expand, wide, border original, 60, draw distance original, fog original) for each key a session's
+  `graphics.cfg` lacks, so sessions and reference pictures keep their meaning; `gfx_cfg_test` checks the presets, and the
+  `menu-preset` session clicks them.
 - The ERZ (RNC) decoder is about twice as fast (a lookup table for the Huffman codes; CRCs checked only in verbose
   mode). Its output is unchanged.
 - The game library ABI is now 5 (4: the import table gains `thps_memset` and `thps_memcpy`; 5: the games import the

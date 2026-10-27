@@ -1608,7 +1608,8 @@ def main() -> int:
         inst = None
         try:
             inst = H.Instance(config, sdir / "host.log", rom=rom, extra=extra, control_args=sess.get("control_args"),
-                              env=sess.get("env"))   # the session's own environment (e.g. THPS_DD_CANARY=1)
+                              pin_gfx=not sess.get("fresh_gfx_defaults"),   # harness.TEST_GFX_DEFAULTS
+                              env=sess.get("env"))                          # the session's own environment (e.g. THPS_DD_CANARY=1)
             inst.note(f"uptime: {load['uptime']}")
         except Exception as e:  # noqa: BLE001
             for n, what, _ in sess["scenarios"]:

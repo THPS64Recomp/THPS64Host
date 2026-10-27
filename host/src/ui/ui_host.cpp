@@ -56,6 +56,7 @@ int64_t clock_ticks() { return std::chrono::steady_clock::now().time_since_epoch
 // ---- option values as the menu shows them (strings: RmlUi radio buttons compare strings) -------------------
 
 std::string gfx_aspect() { return thps::gfx.aspect; }
+std::string gfx_preset_name() { return thps::gfx_preset(); }
 std::string gfx_hud() { return thps::gfx.hud; }
 std::string gfx_split() { return thps::gfx.split_wide ? "wide" : "original"; }
 std::string gfx_border() { return thps::gfx.border; }
@@ -65,13 +66,21 @@ std::string gfx_window() { return thps::gfx.fullscreen ? "fullscreen" : "windowe
 std::string gfx_res_scale() { return std::to_string(thps::gfx.res_scale); }
 std::string gfx_refresh() { return thps::gfx.refresh < 0 ? "display" : thps::gfx.refresh == 0 ? "original" : std::to_string(thps::gfx.refresh); }
 
+Rml::DataModelHandle g_graphics;   // the Graphics tab: a preset changes six rows, and any row can change the preset
+
 // A graphics option changed: gfx_config_set (validates), graphics.cfg, then ask the gfx thread to apply it
 // (RT64Context::update_config runs on the renderer thread; ultramodern triggers it from set_graphics_config).
 void gfx_changed(const std::string& key, const std::string& value) {
+    if (key == "preset" && value == "custom") return;   // Custom is shown, not chosen
     if (!thps::gfx_config_set(key, value)) return;
     thps::gfx_config_save(g_config_dir / "graphics.cfg");
     thps::settings::mark_changed();
     ultramodern::renderer::set_graphics_config(ultramodern::renderer::get_graphics_config());
+    if (key == "preset") {
+        std::printf("[thps] settings: graphics preset %s\n", value.c_str());
+        std::fflush(stdout);
+    }
+    if (g_graphics) g_graphics.DirtyAllVariables();   // the preset's rows, or the Preset row after a single row changed
 }
 
 // ---- Controls tab: binding rows, capture, the Controllers list (render thread; ui state reads a copy) ---------------------------
@@ -448,6 +457,8 @@ void build_models(Rml::Context* ctx) {
     }
     if (auto c = ctx->CreateDataModel("graphics_model")) {
         g_handles.push_back(c.GetModelHandle());
+        bind_string(c, "gfx_preset", gfx_preset_name, [](const std::string& v) { gfx_changed("preset", v); });
+        c.BindFunc("gfx_preset_is_custom", [](Rml::Variant& v) { v = thps::gfx_preset() == "custom"; });
         bind_string(c, "aspect", gfx_aspect, [](const std::string& v) { gfx_changed("aspect", v); });
         bind_string(c, "hud", gfx_hud, [](const std::string& v) { gfx_changed("hud", v); });
         c.BindFunc("show_hud", [](Rml::Variant& v) { v = thps::hud_supported(); });
@@ -466,6 +477,7 @@ void build_models(Rml::Context* ctx) {
             v = true;
 #endif
         });
+        g_graphics = c.GetModelHandle();
     }
     if (auto c = ctx->CreateDataModel("sound_model")) {
         g_handles.push_back(c.GetModelHandle());
@@ -590,12 +602,13 @@ void switch_tab(UiState& ui, int delta) {
     if (n > 0) set_tab(ui, (tabs->GetActiveTab() + delta + n) % n);
 }
 
-// RmlUi's spatial navigation looks only inside the focused element's nearest scroll container and never enters another one, so
-// in the Controls tab (a scrolling list) Up / Down could neither go from the tab bar into the list nor back out of it; and from a
-// row of radio buttons whose labels wrap differently it took the row's other radio for "below". When an Up / Down press left the
-// focus where it was or in the same row (same parent), search the whole visible menu again, rows first: the distance along the
-// direction plus a tenth of the sideways gap (RmlUi weighs the gap 10000x, which skips a row whose buttons sit to one side), and
-// scroll the element found into view.
+// Up / Down are ours, not RmlUi's spatial navigation. RmlUi looks only inside the focused element's nearest scroll container and
+// never enters another one, so in the Controls tab (a scrolling list) Up / Down could neither go from the tab bar into the list nor
+// back out of it; from a row of radio buttons whose labels wrap differently it took the row's other radio for "below"; and it weighs
+// the sideways gap 10000x, so from a choice at the right end of a row it went to the next element straight below, skipping every
+// row whose choices end further left (playtest 2026-10-26). So Up / Down search the whole visible menu: the nearest row in that
+// direction first (the elements of another parent within kRowSlack of the nearest one), then the element of that row nearest
+// sideways, and scroll it into view. Left / Right stay RmlUi's (within a row).
 void collect_focusable(Rml::Element* e, std::vector<Rml::Element*>& out) {
     for (int i = 0; i < e->GetNumChildren(true); i++) {   // with non-DOM children: a tabset keeps its tabs and panels there
         Rml::Element* c = e->GetChild(i);
@@ -615,16 +628,27 @@ bool nav_fallback(UiState& ui, Rml::Element* from, bool down) {
         const Rml::Vector2f p = e->GetAbsoluteOffset(Rml::BoxArea::Border);
         return std::pair{p, p + e->GetBox().GetSize(Rml::BoxArea::Border)};
     };
+    constexpr float kRowSlack = 16.0f;   // px: one row's elements need not share a top edge (labels of different heights)
     const auto [a0, a1] = box(from);
-    Rml::Element* best = nullptr;
-    float best_h = 0;
-    for (Rml::Element* e : all) {
-        if (e == from || e->GetParentNode() == from->GetParentNode()) continue;
+    auto main_gap = [&](Rml::Element* e) {
         const auto [b0, b1] = box(e);
-        const float main = down ? b0.y - a1.y : a0.y - b1.y;
-        if (main < 0) continue;
-        const float h = main + 0.1f * (std::max(0.0f, b0.x - a1.x) + std::max(0.0f, a0.x - b1.x));
-        if (!best || h < best_h) best = e, best_h = h;
+        return down ? b0.y - a1.y : a0.y - b1.y;
+    };
+    auto side_gap = [&](Rml::Element* e) {
+        const auto [b0, b1] = box(e);
+        return std::max(0.0f, b0.x - a1.x) + std::max(0.0f, a0.x - b1.x);
+    };
+    std::vector<Rml::Element*> ahead;
+    float row = 0;
+    for (Rml::Element* e : all) {
+        if (e == from || e->GetParentNode() == from->GetParentNode() || main_gap(e) < 0) continue;
+        if (ahead.empty() || main_gap(e) < row) row = main_gap(e);
+        ahead.push_back(e);
+    }
+    Rml::Element* best = nullptr;
+    for (Rml::Element* e : ahead) {
+        if (main_gap(e) > row + kRowSlack) continue;
+        if (!best || side_gap(e) < side_gap(best) || (side_gap(e) == side_gap(best) && main_gap(e) < main_gap(best))) best = e;
     }
     if (!best) return false;
     best->Focus(true);
@@ -632,14 +656,30 @@ bool nav_fallback(UiState& ui, Rml::Element* from, bool down) {
     return true;
 }
 
-// A navigation key (pad D-pad, stick, arrows) for RmlUi, with the fallback above for Up / Down.
+// The focused setting's whole row (title, choices, details) into view: the focus is on a radio input, which sits at the top of its row,
+// so scrolling only it into view left the row's choices below a scrolling tab's edge (the Graphics tab's Window Mode at 1280x720).
+void scroll_row_into_view(Rml::Element* e) {
+    for (Rml::Element* p = e; p; p = p->GetParentNode()) {
+        if (p->IsClassSet("config-option")) {
+            p->ScrollIntoView(Rml::ScrollIntoViewOptions(Rml::ScrollAlignment::Nearest, Rml::ScrollAlignment::Nearest));
+            return;
+        }
+    }
+}
+
+// A navigation key (pad D-pad, stick, arrows): Left / Right to RmlUi, Up / Down by the row search above; with nothing further that
+// way the focus stays where it is. With no focus yet (the document itself), Up / Down go to RmlUi, which picks the first element.
+// (The pad's key-up still goes to RmlUi; a key-up without its key-down does nothing there.)
 void nav_key_down(UiState& ui, int sdl_key) {
-    Rml::Element* before = ui.context->GetFocusElement();
-    ui.context->ProcessKeyDown(RmlSDL::ConvertKey(sdl_key), 0);
-    if ((sdl_key != SDLK_UP && sdl_key != SDLK_DOWN) || !before) return;
-    Rml::Element* after = ui.context->GetFocusElement();
-    if (after != before && !(after && after->GetParentNode() == before->GetParentNode())) return;
-    if (!nav_fallback(ui, before, sdl_key == SDLK_DOWN) && after != before) before->Focus(true);   // nothing further: stay put
+    Rml::Element* from = ui.context->GetFocusElement();
+    const bool vertical = sdl_key == SDLK_UP || sdl_key == SDLK_DOWN;
+    if (!vertical || !from || from == ui.context->GetRootElement() || from->GetTagName() == "body") {
+        ui.context->ProcessKeyDown(RmlSDL::ConvertKey(sdl_key), 0);
+        if (vertical) scroll_row_into_view(ui.context->GetFocusElement());
+        return;
+    }
+    nav_fallback(ui, from, sdl_key == SDLK_DOWN);
+    scroll_row_into_view(ui.context->GetFocusElement());
 }
 
 void pad_button_down(UiState& ui, int button) {

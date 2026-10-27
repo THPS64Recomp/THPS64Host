@@ -315,8 +315,12 @@ public:
         uc.antialiasing = g.msaa == 8 ? AA::MSAA8X : g.msaa == 4 ? AA::MSAA4X : g.msaa == 2 ? AA::MSAA2X : AA::None;
         // Frame interpolation (src/interpolation.cpp): RT64 renders in-between frames up to this rate.
         using RR = RT64::UserConfiguration::RefreshRate;
-        uc.refreshRate = g.refresh < 0 ? RR::Display : g.refresh > 0 ? RR::Manual : RR::Original;
-        if (g.refresh > 0) uc.refreshRateTarget = g.refresh;
+        // The settings give Original (30) or 60. Tests and measurements only: THPS_TEST_REFRESH=display|N overrides it for the run (not saved;
+        // 120 Hz is not offered: it paced badly on a ProMotion display, 2026-10-23).
+        int rate = g.refresh;
+        if (const char* t = std::getenv("THPS_TEST_REFRESH")) rate = std::string(t) == "display" ? -1 : std::max(0, std::atoi(t));
+        uc.refreshRate = rate < 0 ? RR::Display : rate > 0 ? RR::Manual : RR::Original;
+        if (rate > 0) uc.refreshRateTarget = rate;
         std::printf("[thps] gfx: %s\n", thps::gfx_describe().c_str());
         std::fflush(stdout);
     }
@@ -519,6 +523,7 @@ public:
         uint64_t n = thps::stats.gfx_tasks.fetch_add(1);
         thps::fix_display_list(app->core.RDRAM, task->t.data_ptr);
         thps::crop_display_list(app->core.RDRAM, task->t.data_ptr);   // graphics setting border=fill (src/border_crop.cpp)
+        thps::fog_display_list(app->core.RDRAM, task->t.data_ptr);    // graphics setting fog=soft|off (src/fog.cpp)
         thps::inspect_display_list(app->core.RDRAM, uint32_t(n), task->t.ucode, task->t.data_ptr, task->t.data_size);
         thps::dd::note_task(app->core.RDRAM, task->t.data_ptr, task->t.data_size);   // src/draw_distance.cpp: buffer high-water marks
         app->state->rsp->reset();

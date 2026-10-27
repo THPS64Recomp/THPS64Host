@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """First-run flow tests (Q26): ROM picker/errors, build progress, missing compiler, cancel, damaged library, second instance,
-read-only folder, full disk, app update. Shared by THPS1-3 (ADR 0006): the game comes from $THPS_HOST (game/game.toml, decomp/common/games.toml).
+read-only folder, full disk, app update, the graphics defaults in force on a fresh config. Shared by THPS1-3 (ADR 0006): the game comes from $THPS_HOST (game/game.toml, decomp/common/games.toml).
 Stdlib only. Usage:
 
     python3 -I tests/firstrun_test.py [--binary PATH] [--only NAME ...] [--shots DIR] [--list]
@@ -746,6 +746,33 @@ def menu_hint(c: Ctx):
     return "game started after the first-run build; the menu's assets load and the one-time Settings hint is armed (ui-hint-shown)"
 
 
+def fresh_defaults(c: Ctx):
+    """The split build's first start on a config with no graphics.cfg (as after the first-run build): Enhanced is saved AND in force (the
+    start line's "live:" part: border fill, HUD placement, 16:9; fog original, the game's list untouched), and it is still in force while the game runs
+    (review 2026-10-26, finding 2: the defaults were written but not applied until the second start)."""
+    cfg = c.cfg("defaults", with_library=True)
+    (cfg / "graphics.cfg").unlink(missing_ok=True)
+    e = dict(os.environ)
+    for k in ("THPS_GAME_LIB", "THPS_UI", "THPS_UI_ACTIONS"):
+        e.pop(k, None)
+    ctl = Control(c.binary, ["--config", str(cfg), "--skip-intro"], e)
+    try:
+        start = next((l for l in ctl.lines if l.startswith("[thps] start:")), "")
+        ctl.ask("wait 240")
+        fog = ctl.ask("fog")
+        stats = ctl.ask("stats")
+    finally:
+        ctl.close()
+    check(re.search(r"live: crop=1 fog=original hud=1 aspect=1\.778", start) is not None, f"start line: {start!r}")
+    check(" preset=enhanced" in start, f"start line: {start!r}")
+    text = (cfg / "graphics.cfg").read_text() if (cfg / "graphics.cfg").exists() else ""
+    check(re.search(r"(?m)^border=fill$", text) and re.search(r"(?m)^fog=original$", text), f"graphics.cfg: {text!r}")
+    check(re.match(r"ok fog fog=original .*edits=0 .*walks=0", fog) is not None, f"fog: {fog!r}")   # Original never walks the lists
+    m = re.search(r"crop=(\d) crop_tasks=(\d+)", stats)
+    check(m is not None and m.group(1) == "1", f"stats: {stats!r}")
+    return f"no graphics.cfg: Enhanced saved and in force ({start[start.find('live:'):]}); after 240 frames fog original (no walk), crop=1 ({m.group(2)} tasks filled)"
+
+
 # ------------------------------------------------------------------------------------------------ relaunch: no build, saves persist
 # "Does it compile every time I open the app?" (user, 2026-10-12). It must not: the first launch builds <config>/game/<game>_game_<class>.<ext> + .stamp,
 # every later launch (same app, a moved or renamed copy of it, a launch through LaunchServices) loads it. And a Controller Pak save made in one launch
@@ -914,6 +941,7 @@ SCENARIOS = [
     ("build_failure", build_failure, [ROM_MAIN]),
     ("first_run_log", first_run_log, [ROM_MAIN]),
     ("menu_hint", menu_hint, [ROM_MAIN]),
+    ("fresh_defaults", fresh_defaults, [ROM_MAIN]),
     ("relaunch_open", relaunch_open, [ROM_MAIN]),
     ("relaunch_saves", relaunch_saves, [ROM_MAIN]),
 ]

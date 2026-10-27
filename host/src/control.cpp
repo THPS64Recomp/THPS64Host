@@ -41,6 +41,8 @@
 //                               with DIR, the first 6 frames are also saved there as PNGs (ROM-derived: local)
 //   cull K                      set --cull-extra K live (widescreen culling A/B on a paused frame)
 //   border [original|fill]      the border setting live, not saved (A/B on a paused frame), and the crop counters
+//   fog [original|soft|off] [START]  the fog setting live, not saved (START: Soft's start as a fraction of the far plane, 0..1), and
+//                               the fog counters (src/fog.cpp)
 //   crash                       the game thread writes to a null pointer at its next input poll (crash.log test)
 //   ramsave PATH                the whole RDRAM (as the host stores it: native-endian words) -> PATH
 //                               (ROM-derived: local only, e.g. under build/)
@@ -218,6 +220,12 @@ void handle(const std::string& line) {
         in >> v;
         if (v == "original" || v == "fill") thps::border_crop_set(v == "fill");
         reply("ok border " + thps::border_crop_report());
+    } else if (cmd == "fog") {   // fog [original|soft|off] [START]: live, for this run only (--fog and graphics.cfg save it)
+        std::string v;
+        float st = 0.0f;
+        in >> v >> st;
+        if (thps::fog_valid(v)) thps::fog_set(v, st);
+        reply("ok fog " + thps::fog_report());
     } else if (cmd == "inputstate") {
         reply("ok inputstate " + thps::input_state());
     } else if (cmd == "overlays") {

@@ -6,7 +6,8 @@
     <style>
         body { width: 100%; height: 100%; }
         .menu-title { padding: 18dp 28dp 0dp 28dp; font-size: 22dp; color: #8d8ca0; }
-        /* Controls tab: the Controllers list and the binding rows */
+        /* Every tab scrolls when its rows do not fit the panel (a small window: the Graphics tab at 1280x720 ran into the footer); pad and
+           arrow navigation scroll the focused row into view (src/ui/ui_host.cpp nav_fallback). Controls tab: the Controllers list and the binding rows */
         .ctl-scroll { overflow-y: auto; }
         .ctl-panel { height: 100%; }
         .ctl-panel .config__hz-wrapper { flex: 1 1 0dp; }
@@ -49,10 +50,10 @@
                     <div>General</div>
                     <div class="tab__indicator"></div>
                 </tab>
-                <panel class="config" data-model="general_model">
+                <panel class="config ctl-panel" data-model="general_model">
                     <form class="config__form">
                         <div class="config__hz-wrapper">
-                            <div class="config__wrapper">
+                            <div class="config__wrapper ctl-scroll">
                     <div class="config-option">
                         <label class="config-option__title">Skip Intro</label>
                         <div class="config-option__list">
@@ -148,10 +149,22 @@
                     <div>Graphics</div>
                     <div class="tab__indicator"></div>
                 </tab>
-                <panel class="config" data-model="graphics_model">
+                <panel class="config ctl-panel" data-model="graphics_model">
                     <form class="config__form">
                         <div class="config__hz-wrapper">
-                            <div class="config__wrapper">
+                            <div class="config__wrapper ctl-scroll">
+                    <div class="config-option">
+                        <label class="config-option__title">Preset</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="gfx_preset" data-checked="gfx_preset" value="original" id="gp_original" />
+                            <label class="config-option__tab-label" id="lbl_gp_original" for="gp_original">Original</label>
+                            <input type="radio" name="gfx_preset" data-checked="gfx_preset" value="enhanced" id="gp_enhanced" />
+                            <label class="config-option__tab-label" id="lbl_gp_enhanced" for="gp_enhanced">Enhanced</label>
+                            <input type="radio" name="gfx_preset" data-checked="gfx_preset" value="custom" id="gp_custom" data-if="gfx_preset_is_custom" />
+                            <label class="config-option__tab-label" id="lbl_gp_custom" for="gp_custom" data-if="gfx_preset_is_custom">Custom</label>
+                            <div class="config-option__details">Original: 4:3, 30 fps and the game's draw distance, as on the N64. Enhanced: 16:9, HUD at the edges, 60 fps, no black frame, full draw distance. Choosing one replaces your choices in those rows. Custom means they match neither.</div>
+                        </div>
+                    </div>
                     <div class="config-option">
                         <label class="config-option__title">Aspect Ratio</label>
                         <div class="config-option__list">
@@ -245,12 +258,8 @@
                         <div class="config-option__list">
                             <input type="radio" name="refresh" data-checked="refresh" value="original" id="rr_original" />
                             <label class="config-option__tab-label" id="lbl_rr_original" for="rr_original">Original (30)</label>
-                            <input type="radio" name="refresh" data-checked="refresh" value="display" id="rr_display" />
-                            <label class="config-option__tab-label" id="lbl_rr_display" for="rr_display">Match display</label>
                             <input type="radio" name="refresh" data-checked="refresh" value="60" id="rr_60" />
                             <label class="config-option__tab-label" id="lbl_rr_60" for="rr_60">60</label>
-                            <input type="radio" name="refresh" data-checked="refresh" value="120" id="rr_120" />
-                            <label class="config-option__tab-label" id="lbl_rr_120" for="rr_120">120</label>
                             <div class="config-option__details">Extra frames are interpolated between the game's own.</div>
                         </div>
                     </div>
@@ -271,10 +280,10 @@
                     <div>Sound</div>
                     <div class="tab__indicator"></div>
                 </tab>
-                <panel class="config" data-model="sound_model">
+                <panel class="config ctl-panel" data-model="sound_model">
                     <form class="config__form">
                         <div class="config__hz-wrapper">
-                            <div class="config__wrapper">
+                            <div class="config__wrapper ctl-scroll">
                     <div class="config-option">
                         <label class="config-option__title">Main Volume</label>
                         <div class="config-option__range-wrapper config-option__list">
@@ -290,10 +299,10 @@
                     <div>Cheats</div>
                     <div class="tab__indicator"></div>
                 </tab>
-                <panel class="config" data-model="cheats_model">
+                <panel class="config ctl-panel" data-model="cheats_model">
                     <form class="config__form">
                         <div class="config__hz-wrapper">
-                            <div class="config__wrapper">
+                            <div class="config__wrapper ctl-scroll">
                     <div class="config-option">
                         <p>Test aids for play testing, all off by default. They aren't stored in your Controller Pak save, but progress you make with one on is saved as usual. The log and crash.log name the ones that are on.</p>
                     </div>

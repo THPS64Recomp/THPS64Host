@@ -18,7 +18,8 @@
 //                     [--no-pak] [--rumble-pak] [--si-requeue] [--save-dir DIR] [--rt64-dump-every N] [--rt64-dump-frames a,b]
 //                     [--present-dump-every N] [--present-size WxH] [--present-pair] [--hidden]
 //                     [--aspect original|16:9|21:9|expand] [--window WxH] [--res-scale N] [--msaa N] [--fullscreen]
-//                     [--hud original|16:9|expand] [--split wide|original] [--border original|fill]
+//                     [--hud original|16:9|expand] [--split wide|original] [--preset original|enhanced] [--border original|fill]
+//                     [--fog original|soft|off]
 //                     [--draw-distance original|2x|4x|full] [--dd-buffers bigger|original]
 //                     [--skip-intro|--no-skip-intro] [--show-fps|--no-show-fps] [--volume N] [--check-rom PATH]
 //                     [--version ID] [--tv pal|ntsc|mpal]
@@ -515,7 +516,9 @@ int main(int argc_in, char** argv_in) {
         else if (arg("--refresh")) gfx_overrides.emplace_back("refresh", argv[++i]);
         else if (arg("--hud")) gfx_overrides.emplace_back("hud", argv[++i]);
         else if (arg("--split")) gfx_overrides.emplace_back("split", argv[++i]);
+        else if (arg("--preset")) gfx_overrides.emplace_back("preset", argv[++i]);   // the seven rows of a graphics preset; flags after it change single rows
         else if (arg("--border")) gfx_overrides.emplace_back("border", argv[++i]);
+        else if (arg("--fog")) gfx_overrides.emplace_back("fog", argv[++i]);
         else if (arg("--draw-distance")) gfx_overrides.emplace_back("draw_distance", argv[++i]);
         else if (arg("--dd-buffers")) gfx_overrides.emplace_back("dd_buffers", argv[++i]);
         else if (arg("--controls-preset")) controls_preset = argv[++i];
@@ -645,9 +648,9 @@ int main(int argc_in, char** argv_in) {
         std::printf("[thps] input: --controls-preset %s: %s\n", controls_preset.c_str(), r.c_str());
         if (r.rfind("err", 0) == 0) return 2;
     }
-    std::printf("[thps] start: seconds=%.1f config=%s gfx: %s skip_intro=%d show_fps=%d volume=%.0f%%\n", g_run_seconds,
+    std::printf("[thps] start: seconds=%.1f config=%s gfx: %s skip_intro=%d show_fps=%d volume=%.0f%% %s\n", g_run_seconds,
                 config_dir.string().c_str(), thps::gfx_describe().c_str(), int(thps::settings::skip_intro()),
-                int(thps::settings::show_fps()), thps::settings::volume() * 100.0f);
+                int(thps::settings::show_fps()), thps::settings::volume() * 100.0f, thps::gfx_live().c_str());
     thps::cheats::load(config_dir);   // cheats.cfg + the command-line flags; one log line when any is on
 
     for (const recomp::GameEntry& game : games) {

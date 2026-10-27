@@ -16,7 +16,8 @@ from the level into its pause menu):
                 switches to Original at run time (graphics.cfg border=original, the black frame is back) and to Fill again.
   crop-219      21:9 (1280x540: a window of exactly 64:27, so RT64 adds no letterbox rows of its own), `--border fill`: the level frame has picture in all four bands.
   crop-43       4:3 (`--aspect original`, 960x720), `--border fill`: the same, plus still bands on the pause menu.
-  border-default  16:9, no flag (the default): the frame is black in all four bands and nothing is cropped (the setting is inert).
+  border-default  16:9, no flag: border=original from the harness's test defaults (harness.TEST_GFX_DEFAULTS; a new install gets fill,
+                the Enhanced preset): the frame is black in all four bands and nothing is cropped (the setting is inert).
   two-players-169-crop  (crop_two_players: two players at 16:9 with `--border fill`, from the game's own two-player steps): both
                 split views reach the window's edges (picture in all four bands), the split-screen halves are cropped (`crop_halves`) and
                 RT64 still widens them as a split screen (`split` views). The views meet at the game's own 2 px divider in the middle.
@@ -138,7 +139,7 @@ def crop_sessions(to_level, *, boot=(), pause=()):
         ]),
         dict(name="border-default", config="border-default-config", fresh_pak=True, wav=False, fresh_files=["graphics.cfg"],
              args=["--aspect", "16:9", "--window", "1280x720", *WIDE], scenarios=[
-            ("border_default", "the default (border=original, nothing on the command line): the black frame is there and no task is cropped", [
+            ("border_default", "border=original (the test default, nothing on the command line): the black frame is there and no task is cropped", [
                 *_level("orig169", [], boot=boot, to_level=to_level, setting="original"),
                 ("file_contains", "graphics.cfg", r"(?m)^border=original$"),
             ]),

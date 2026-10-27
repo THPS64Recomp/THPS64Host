@@ -47,8 +47,9 @@ constexpr float kFar = 2.0f, kMax = 4.0f, kFull = 64.0f;   // full: as far as kF
 constexpr float kBackoff = 0.85f, kPanic = 0.95f, kRecover = 0.70f;
 constexpr float kRampStep = 1.15f;   // recovery below the ceiling, per frame while all buffers are under kRecover
 
-std::atomic<float> g_target{1.0f};     // the setting's factor (or `dd factor`)
-std::atomic<float> g_in_use{1.0f};     // after the governor: what dd_game_far applies
+// The default setting is `full` (the Enhanced graphics preset, v0.2: src/gfx_config.cpp); graphics.cfg, --draw-distance and --preset change it.
+std::atomic<float> g_target{kFull};    // the setting's factor (or `dd factor`)
+std::atomic<float> g_in_use{kFull};    // after the governor: what dd_game_far applies
 std::atomic<float> g_in_use_min{64.0f}; // lowest factor the governor went to since `dd reset`
 std::atomic<float> g_ceiling{64.0f};    // the governor's learned ceiling for this course: after a back-off it recovers only up to here
 std::atomic<float> g_level_far{0.0f};   // the game's own far of the course in play (how far the factor can go: kFullFarPlane / this)
@@ -70,8 +71,8 @@ std::atomic<uint32_t> g_dl_hw{0}, g_dl_cap{0}, g_mtx_hw{0}, g_mtx_cap{0}, g_vtx_
 std::atomic<float> g_far_seen{0.0f};
 std::atomic<float> g_effective{1.0f};  // what the last scaled call really used (far / the game's far): below g_in_use when the full clamp applies
 std::atomic<float> g_cap_scale{1.0f};   // tests (`dd testcap PCT`): the governor acts as if the buffers were this much of their size
-std::string g_mode = "original";
-std::atomic<bool> g_full{false};
+std::string g_mode = "full";
+std::atomic<bool> g_full{true};
 std::atomic<bool> g_big_buffers{true};     // dd_buffers (start-up): the games allocate the bigger matrix pools
 std::atomic<int> g_showall_override{-1};   // tests (`dd showall 0|1|auto`): -1 = follow the mode
 std::mutex g_mode_mutex;

@@ -55,12 +55,36 @@ class HostError(RuntimeError):
     pass
 
 
+# The graphics defaults the tests were written for. v0.2 made the Enhanced preset the fresh-install default (border fill, draw distance
+# full: src/gfx_config.cpp), which would change what most sessions see (fog's default is original again, kept here so a folder an
+# earlier v0.2 build saved with fog=soft can't change a session). So before a start, every key of these that the config folder's
+# graphics.cfg lacks is added with the old default: a fresh folder starts as before, and an older folder (which never wrote
+# draw_distance=original) keeps its meaning. A session's flags still win (they come after the file); a key already in the file stays (the
+# menu sessions' reload checks need what an earlier run saved). Instance(pin_gfx=False) skips it (run.py: a session with
+# fresh_gfx_defaults=True, to see the real defaults).
+TEST_GFX_DEFAULTS = {"aspect": "16:9", "hud": "expand", "split": "wide", "border": "original", "refresh": "60", "draw_distance": "original",
+                     "fog": "original"}
+
+
+def pin_gfx_defaults(config: Path) -> list[str]:
+    """Adds the TEST_GFX_DEFAULTS keys config/graphics.cfg lacks; returns the lines added."""
+    f = config / "graphics.cfg"
+    text = f.read_text() if f.exists() else ""
+    have = set(re.findall(r"(?m)^([a-z_]+)=", text))
+    add = [f"{k}={v}" for k, v in TEST_GFX_DEFAULTS.items() if k not in have]
+    if add:
+        config.mkdir(parents=True, exist_ok=True)
+        f.write_text(text + ("\n" if text and not text.endswith("\n") else "") + "\n".join(add) + "\n")
+    return add
+
+
 class Instance:
     """One running <game>_recomp --control. Only one may run at a time (see run.py lock)."""
 
     def __init__(self, config: Path, log_path: Path, rom: str | None = None, extra: list[str] | None = None,
-                 binary: Path = BINARY, line_hook=None, control_args: list[str] | None = None,
+                 binary: Path = BINARY, line_hook=None, control_args: list[str] | None = None, pin_gfx: bool = True,
                  env: dict[str, str] | None = None):
+        pinned = pin_gfx_defaults(config) if pin_gfx else []
         self.line_hook = line_hook   # called with every host output line, on the reader thread (the soak test's monitor, tests/soak.py)
         # control_args: replaces the default "--no-keyboard --no-pads --mute" (the soak test plays through a virtual pad with real audio at volume 0)
         self.log_path = log_path
@@ -72,6 +96,8 @@ class Instance:
         self.args = args
         self._log = open(log_path, "w", buffering=1)
         self._log.write("# " + " ".join(args) + "\n")
+        if pinned:
+            self._log.write("# graphics.cfg: test defaults added: " + " ".join(pinned) + "\n")
         if env:   # a session's own environment variables (run.py `env`: e.g. THPS_DD_CANARY=1), on top of this process's
             self._log.write("# env: " + " ".join(f"{k}={v}" for k, v in env.items()) + "\n")
         self._lines: "queue.Queue[str]" = queue.Queue()
@@ -115,7 +141,7 @@ class Instance:
             m = self._fps_re.match(line)
             if m:
                 self.fps_overlay.append((time.monotonic() - self.start_time, float(m.group(1)), float(m.group(2))))
-            if line.startswith(("[thps] skip intro", "[thps] input", "[thps] launcher", "[thps] check-rom", "[thps] gfx:", "[thps] settings:", "[thps] hfr camera cut", "[thps] cheats", "[thps] draw distance", "[thps] music")):
+            if line.startswith(("[thps] start:", "[thps] skip intro", "[thps] input", "[thps] launcher", "[thps] check-rom", "[thps] gfx:", "[thps] settings:", "[thps] hfr camera cut", "[thps] cheats", "[thps] draw distance", "[thps] music")):
                 self.other_lines.append(line)
             m = self._watch_re.match(line)
             if m:   # answered by the game thread at the poll where the word changed: kept aside so expect() never swallows it

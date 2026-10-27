@@ -18,6 +18,8 @@ is behind the menu, only on what the menu draws and what it saves. A fresh setti
   menu-controls-reload  a new process on the same folder: the rebinding persisted and works.
   menu-controls-row  Default on one row of a swap takes its button back from the other row and gives that row what it gave up.
   menu-controls-base(-reload)  N64, one slot customised, a restart: the marks, a row's Default and Reset all still use the N64 layout.
+  menu-preset  the Graphics tab's Preset row: Enhanced and Original set aspect, HUD, split, border, frame rate and draw distance at once
+               (live and saved); one row changed shows Custom; Custom itself is not a choice.
   menu-ports   the Controllers list: two virtual pads, Swap players, Player 1 / Player 2 per pad, the live "pressed" indicator, and
                a single pad on player 2 with the keyboard alone on player 1.
 """
@@ -66,6 +68,9 @@ MENU_SESSIONS = [
             ("ui", "click #lbl_ms_2"),
             ("ui", "click #lbl_ar_219"),
             ("ui", "click #lbl_rs_2"),
+            ("ui", "click #lbl_rr_original"),   # Frame Rate: Original (30) or 60 (the default) only
+            ("ui_state", "gfx.refresh=0"),
+            ("file_contains", "graphics.cfg", r"(?m)^refresh=original$"),
             ("ui", "click #lbl_rr_60"),
             ("ui_state", "gfx.msaa=2 gfx.aspect=21:9 gfx.res_scale=2 gfx.refresh=60"),
             ("file_contains", "graphics.cfg", r"(?m)^msaa=2$"),
@@ -74,6 +79,24 @@ MENU_SESSIONS = [
             ("file_contains", "graphics.cfg", r"(?m)^refresh=60$"),
             ("log", r"gfx: aspect=21:9 .* res_scale=2 .* msaa=2 .* refresh=60"),
             ("ui_frame", "menu_graphics", TAB_BAR, 250, None),
+        ]),
+        ("menu_scroll", "Graphics tab at 1280x720: its rows do not all fit; Down from the tab bar reaches Window Mode, the last row, scrolled into view", [
+            ("ui", "tab 2"),
+            ("ui", "key up"), ("ui", "key up"),   # to the tab bar
+            # Preset, Aspect, HUD, Draw Distance, Split, Border, Resolution, MSAA, Frame Rate, Window Mode; two more stay on the last row
+            *[("ui", "key down") for _ in range(12)],
+            ("ctl_match", "ui state", r" focus=wm_(windowed|fullscreen) "),
+            ("ui_frame", "menu_graphics_bottom", TAB_BAR, 250, None),
+        ]),
+        ("menu_nav_rows", "pad: Down from the last choice of Draw Distance (4 choices) goes to the next row, Split Screen (2), and Up back", [
+            *[("ui", "key up") for _ in range(12)],   # to the tab bar (Up stays there)
+            *[("ui", "pad down") for _ in range(4)],   # Preset, Aspect, HUD, Draw Distance
+            *[("ui", "pad right") for _ in range(4)],
+            ("ui_state", "focus=dd_full"),
+            ("ui", "pad down"),   # RmlUi's own pick was the next element straight below: a row further down
+            ("ctl_match", "ui state", r" focus=split_(original|wide) "),
+            ("ui", "pad up"),
+            ("ctl_match", "ui state", r" focus=dd_\w+ "),
         ]),
         ("menu_pad", "pad: Back toggles, RB / D-pad / A pick the N64 layout (controls.cfg), a click on the volume track and the D-pad move it, B closes", [
             ("ui", "esc"),
@@ -468,6 +491,51 @@ MENU_SESSIONS = [
             ("ui", "esc"),
         ]),
     ]),
+    # The Graphics tab's Preset row (v0.2, src/gfx_config.cpp): Original and Enhanced set six rows at once, live and saved; a single row
+    # changed afterwards shows Custom, and clicking Custom changes nothing. Starts from the harness's test defaults (harness.TEST_GFX_DEFAULTS:
+    # 16:9, expand, wide, border original, 60, draw distance original), which match neither preset, and fog off (--fog), which neither
+    # preset touches (fog is graphics.cfg and --fog only).
+    dict(name="menu-preset", config="menu-preset-config", fresh_pak=True, wav=False, requires="menu",
+         fresh_files=["general.cfg", "graphics.cfg", "controls.cfg", "controls.cfg.bak", "controls.preset", "ui-hint-shown"],
+         args=["--skip-intro", "--hidden", "--window", "1280x720", "--fog", "off"], scenarios=[
+        ("menu_preset_click", "Graphics > Preset: Enhanced, then Original set the six rows (live, graphics.cfg), fog untouched; one row changed -> Custom", [
+            ("ui", "esc"),
+            ("ui_state", "open=1"),
+            ("ui", "tab 2"),
+            ("ui_state", "tab=2 gfx.preset=custom"),
+            ("ui", "click #lbl_gp_enhanced"),
+            ("ui_state", "gfx.preset=enhanced gfx.aspect=16:9 gfx.hud=expand gfx.split=wide gfx.border=fill gfx.refresh=60 gfx.draw_distance=full gfx.fog=off gfx.msaa=4"),
+            ("file_contains", "graphics.cfg", r"(?m)^border=fill$"),
+            ("file_contains", "graphics.cfg", r"(?m)^fog=off$"),
+            ("ctl_match", "fog", r"fog=off "),
+            ("file_contains", "graphics.cfg", r"(?m)^draw_distance=full$"),
+            ("log", r"settings: graphics preset enhanced"),
+            ("log", r"draw distance: full"),
+            ("ctl_match", "stats", r"crop=1 "),
+            ("ui", "click #lbl_gp_original"),
+            ("ui_state", "gfx.preset=original gfx.aspect=original gfx.hud=original gfx.split=original gfx.border=original gfx.refresh=0 gfx.draw_distance=original gfx.fog=off gfx.msaa=4"),
+            ("file_contains", "graphics.cfg", r"(?m)^aspect=original$"),
+            ("file_contains", "graphics.cfg", r"(?m)^hud=original$"),
+            ("file_contains", "graphics.cfg", r"(?m)^split=original$"),
+            ("file_contains", "graphics.cfg", r"(?m)^border=original$"),
+            ("file_contains", "graphics.cfg", r"(?m)^refresh=original$"),
+            ("file_contains", "graphics.cfg", r"(?m)^draw_distance=original$"),
+            ("file_contains", "graphics.cfg", r"(?m)^fog=off$"),
+            ("ctl_match", "fog", r"fog=off "),
+            ("log", r"draw distance: original"),
+            ("ctl_match", "stats", r"crop=0 "),
+            ("ctl_match", "split", r"wide=0 "),
+            ("ui", "click #lbl_rr_60"),
+            ("ui_state", "gfx.preset=custom gfx.refresh=60 gfx.aspect=original"),
+            ("file_contains", "graphics.cfg", r"(?m)^refresh=60$"),
+            ("ui", "click #lbl_gp_custom"),
+            ("ui_state", "gfx.preset=custom gfx.refresh=60 gfx.aspect=original"),
+            ("ui", "click #lbl_gp_enhanced"),
+            ("ui_state", "gfx.preset=enhanced gfx.aspect=16:9 gfx.fog=off"),
+            ("ui", "esc"),
+            ("ui_state", "open=0"),
+        ]),
+    ]),
     # The menu's Draw Distance radio (graphics.cfg `draw_distance`, written only when not original; src/draw_distance.cpp): live, saved.
     dict(name="menu-dd", config="menu-dd-config", fresh_pak=True, wav=False, requires="menu",
          fresh_files=["general.cfg", "graphics.cfg", "controls.cfg", "controls.cfg.bak", "controls.preset", "ui-hint-shown"],
@@ -488,3 +556,34 @@ MENU_SESSIONS = [
         ]),
     ]),
 ]
+
+
+# ---- fresh-defaults: the fresh-install graphics defaults in force (review 2026-10-26, finding 2; each game's scenarios.py appends it
+# with its own route into a course with fog).
+#
+# Every other session starts from harness.TEST_GFX_DEFAULTS (pin_gfx_defaults adds them to graphics.cfg before the start), so none of them
+# sees what a player's first start does. This one has no graphics.cfg (fresh_files) and is not pinned (fresh_gfx_defaults): the host
+# writes the Enhanced preset and must also run with it. The start line's "live:" part is what gfx_config handed the hooks; then the hooks
+# themselves, in a course: the border fill widened the frames (`stats` crop_tasks), the
+# HUD placement anchored HUD tasks (`hud` tasks_anchored) and the draw distance is Full; fog is original (not in a preset), so the fog hook
+# never walks a list. Before the fix the file said Enhanced while border fill and HUD placement stayed off until the second start.
+def fresh_defaults_session(to_course, settle=30):
+    """to_course: steps from a fresh start to a running course with fog (each game's fog-check route)."""
+    return dict(name="fresh-defaults", config="fresh-defaults-config", fresh_pak=True, wav=False, fresh_gfx_defaults=True,
+                fresh_files=["graphics.cfg"], args=["--skip-intro", "--hidden", "--unlock-levels", "--window", "1280x720"], scenarios=[
+        ("fresh_defaults", "no graphics.cfg: the Enhanced preset is saved and in force from the first start (border fill, HUD, Full; fog original)", [
+            ("log", r"start: .* gfx: aspect=16:9 .* hud=expand split=wide border=fill draw_distance=full dd_buffers=bigger fog=original preset=enhanced .* "
+                    r"live: crop=1 fog=original hud=1 aspect=1\.778"),
+            ("file_contains", "graphics.cfg", r"(?m)^border=fill$"),
+            ("file_contains", "graphics.cfg", r"(?m)^fog=original$"),
+            ("ctl_match", "fog", r"fog=original "),
+            ("ctl_match", "stats", r"crop=1 "),
+            ("ctl_match", "hud", r" enabled=1 "),
+            ("ctl_match", "dd", r"mode=full "),
+            *to_course,
+            ("wait", settle),
+            ("ctl_match", "fog", r"fog=original .*edits=0 .*walks=0"),   # Original: the game's lists as they are, never walked
+            ("ctl_match", "stats", r"crop=1 crop_tasks=[1-9]"),
+            ("ctl_match", "hud", r"tasks_anchored=[1-9]"),
+        ]),
+    ])

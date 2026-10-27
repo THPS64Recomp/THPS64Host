@@ -117,22 +117,30 @@ struct GfxConfig {
     int downsample = 1;               // render at res_scale, show at res_scale / downsample
     int msaa = 4;                     // 0, 2, 4, 8 (Apple GPUs have no 8x: RT64 then turns MSAA off)
     bool fullscreen = false;
-    int refresh = -1;                 // 0 = original (30), -1 = display, N = manual target (frame interpolation)
+    int refresh = 60;                 // 0 = original (30), 60 (frame interpolation); the only two choices since cfg_rev 3 (src/gfx_config.cpp)
     int hpfb = -1;                    // high-precision framebuffer: -1 auto, 0 off, 1 on
     std::string hud = kDefaultHud;    // HUD placement (src/hud_anchor.cpp): original (centred 4:3) | 16:9 (to the 16:9 edges) | expand (to the window's edges)
     bool split_wide = true;           // two-player split screens fill the wide picture (rt64-splitscreen-widescreen.patch, src/hud_anchor.cpp); key split wide|original
-    std::string border = "original";  // the game's 8 px frame around the 3D picture (src/border_crop.cpp): original | fill (3D fills the frame)
+    std::string border = "fill";      // the game's 8 px frame around the 3D picture (src/border_crop.cpp): original | fill (3D fills the frame); fill: the Enhanced preset
+    std::string fog = "original";     // the game's distance fog (src/fog.cpp): original | soft (starts earlier, gentle) | off; not in a preset or the menu
     float aspect_ratio() const;       // target aspect, 0 = original (no widening) or expand (window)
     bool widescreen() const { return aspect != "original"; }
 };
 extern GfxConfig gfx;
 bool gfx_config_set(const std::string& key, const std::string& value);   // false = bad value
 bool gfx_override(const std::string& key, const std::string& value);     // command line: set + remember
+// Graphics presets (v0.2): `original` (the N64 look: 4:3, HUD original, split original, border original, 30 fps, draw distance original)
+// and `enhanced` (the fresh-install default: 16:9, HUD expand, split wide, border fill, 60, draw distance full). Fog is in neither.
+// gfx_config_set("preset", ...) sets those six; gfx_preset() says which one the current values match, or "custom". Computed, never stored, so it cannot disagree with the values.
+std::string gfx_preset();
 void gfx_config_load(const std::filesystem::path& file);
 void gfx_config_save(const std::filesystem::path& file);
 // Settings menu values -> gfx. keep_overrides: re-apply the command-line overrides on top.
 void gfx_from_settings(const ultramodern::renderer::GraphicsConfig& c, const std::string& widescreen, bool keep_overrides);
 std::string gfx_describe();
+// What publish() last handed the hooks (border fill, fog, HUD placement, widened aspect): "live: crop=1 fog=original hud=1 aspect=1.778" on the start
+// line, so a test can tell the state in force from the values in graphics.cfg.
+std::string gfx_live();
 float gfx_widen_factor();             // displayed aspect / (4:3), >= 1 (for game-side cull/HUD hooks)
 extern std::atomic<float> window_aspect;  // drawable width / height (main thread updates it)
 extern std::atomic<float> target_aspect;  // 0 = 4:3, -1 = follow the window, else the target ratio
@@ -328,6 +336,14 @@ void border_crop_set(bool on);
 bool border_crop_on();
 void crop_display_list(uint8_t* rdram, uint32_t data_ptr);
 std::string border_crop_report();   // "crop=0|1 tasks=N scissors=N fills=N bands=N" (control "stats")
+// Fog (src/fog.cpp, graphics setting `fog`): the game's own gSPFogPosition(996, 1000) is rewritten before RT64 reads a gfx task: soft
+// starts the ramp at START x the far plane (never steeper than the game's), off turns it off. fog_set is called by gfx_config (start 0:
+// keep the current one) and by the control command `fog`.
+bool fog_valid(const std::string& v);   // original | soft | off
+void fog_set(const std::string& v, float start = 0.0f);
+void fog_display_list(uint8_t* rdram, uint32_t data_ptr);
+std::string fog_mode();              // the mode in force: original | soft | off
+std::string fog_report();            // "fog=original|soft|off start=S tasks=N found=N edits=N dirty=0|1 outstanding=N walks=N last: r=R cmds=N word=W" (control "fog")
 extern std::atomic<int> edges_frames_left;
 extern std::string edges_dump_dir;   // set before edges_frames_left: also save the first frames as PNGs here
 // --control "dump N DIR": the display-list inspector dumps the next N gfx tasks into DIR (dl_inspect.cpp).
