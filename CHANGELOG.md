@@ -44,18 +44,38 @@ release, the release lists it under a **Games must** heading.
   `memset_recomp` and `memcpy_recomp` hooks to its hooks file.
 - `ftime` trace spans (ERZ, DMA, the mem hooks, `send_dl`, the audio task, RT64's workload thread) in `ftime stop FILE`,
   the test steps `sample`, `sample_wait` and `ftime_max`, and `tests/load_freeze.py` (sessions `lf-probe`, `lf-check`).
+- Draw distance (`draw_distance` in `graphics.cfg`, `--draw-distance`, a Graphics-tab row: `original`, `2x`, `4x`,
+  `full`): the gameplay camera's far plane x2, x4 or out to the whole course, with a governor that steps back while one
+  of the game's per-frame buffers is over 85 % full (the display list, the matrix and vertex pools, and the renderer's
+  mesh lists). The course items the setting adds are drawn first, farthest first, in passes small enough for the
+  renderer's fixed lists, and the game's own set last, so a long distance never drops near meshes. The games always set
+  up bigger matrix pools (THPS2/3 at a course start, THPS1 at start-up) and keep their own cap in force at `original`,
+  so the setting applies without a restart. THPS1 applies a change at once. In THPS2/3 a shorter distance applies at
+  once; a longer one reaches the far scenery after a RETRY, the next course or a camera change. THPS2/3 also give their
+  course display lists 144 KiB each instead of 72. In THPS2/3 an extra pass is drawn only while the display list still
+  has room for it and for the rest of the frame (a backstop; `dd` counts its cuts). Graphics setting `dd_buffers =
+  bigger | original` (`--dd-buffers`, default `bigger`, not in the menu): `original` keeps the games' own allocations
+  exactly. It is read at start-up, so a change needs a restart. Games supply the hooks in `game/draw_distance.cpp`. A
+  game without it still builds, and the setting then changes nothing.
+- Control command `dltrace N`: trace the display lists of the next N frames. `dltrace` alone still traces one.
 
 ### Changed
 - The ERZ (RNC) decoder is about twice as fast (a lookup table for the Huffman codes; CRCs checked only in verbose
   mode). Its output is unchanged.
-- The game library ABI is now 4 (the import table gains `thps_memset` and `thps_memcpy`). A library built by an
-  earlier release is rebuilt once at the next start.
+- The game library ABI is now 5 (4: the import table gains `thps_memset` and `thps_memcpy`; 5: the games import the
+  draw-distance hooks). A library built by an earlier release is rebuilt once at the next start.
 
 ### Fixed
 - THPS2/3: the east-button split (flip while skating, back in menus) turned off as soon as `controls.cfg` stopped
   matching a preset, so Xbox B flipped and grabbed at once. It now follows the bindings.
 - A `controls.cfg` whose `preset =` line names a preset but whose bindings were edited by hand loads as `custom`.
 - Pad navigation in the settings menu reaches elements inside a scrolling list.
+- Tests: the `menu` step checks the screen every 8 frames instead of every 9. The games rotate three framebuffers,
+  so a check every 9 frames always read the same one, and when that one copy was out of date (THPS2 Europe, NY City,
+  draw distance Full) the test missed a pause menu that was on screen. It failed about one run in three.
+
+### Games must
+- Rebuild their game library: `THPS_GAME_ABI` is 5 (the draw-distance hooks in `game_hooks.def`).
 
 ## [0.1.0] - 2026-10-18
 

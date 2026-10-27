@@ -30,6 +30,9 @@ struct Stats {
     std::atomic<uint64_t> erz_ns{0}, erz_max_ns{0}, raw_dma_ns{0};   // time the game thread spent in the ERZ unpack hook / raw ROM DMA copies (ftime)
     std::atomic<uint64_t> raw_dma_bytes{0};
     std::atomic<uint64_t> mem_bytes{0};       // bytes set / copied by the native memset / memcpy hooks (hooks.cpp)
+    // Draw distance's own time (src/draw_distance.cpp, game/draw_distance.cpp), counted only while `ftime` runs: the game-thread hooks
+    // (World_DrawItems' hook without the game's own drawing it calls, the far plane, the pass-end counts) and the gfx thread's note_task.
+    std::atomic<uint64_t> dd_hook_ns{0}, dd_hook_max_ns{0}, dd_hook_calls{0}, dd_task_ns{0}, dd_task_max_ns{0};
     std::atomic<uint64_t> overlay_loads{0};   // front-end overlays mapped (games with overlays: hooks.cpp)
     std::atomic<uint64_t> pio_tail_fixes{0};  // chunk tails completed from the ROM (hooks.cpp)
     std::atomic<uint64_t> input_polls{0};
@@ -75,6 +78,7 @@ struct Options {
     std::string dump_frames;          // comma list of gfx task numbers to dump, e.g. "120,300"
     int dump_every = 0;               // also dump every Nth gfx task (0 = off)
     int dl_trace = -1;                // print every command of this gfx task (-2: of the tasks --control "dump" dumps)
+    int dl_trace_n = 1;               // ... and of the dl_trace_n - 1 tasks after it (control `dltrace N`)
     int rt64_dump_every = 0;          // every Nth displayed frame: PNG of RT64's output read back from RDRAM
     std::string rt64_dump_frames;     // comma list of displayed-frame numbers for the same
     bool no_pak = false;              // no Controller Pak in any port
@@ -335,5 +339,6 @@ void control_reply(const std::string& s);
 // `ftime stop FILE` CSV (`span,NAME,START_S,DUR_MS` rows): erz / dma (game thread), send_dl (gfx thread), update_screen (VI thread),
 // audio (RSP audio task). One relaxed load when ftime is off. `name` must be a string literal.
 void ftime_span(const char* name, std::chrono::steady_clock::time_point t0);
+bool ftime_running();   // `ftime start` .. `ftime stop` (one relaxed load)
 
 }  // namespace thps

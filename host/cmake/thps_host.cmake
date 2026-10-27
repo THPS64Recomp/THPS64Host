@@ -388,6 +388,13 @@ if (THPS_SKIP_INTRO STREQUAL "overlay")
 else()
     set(THPS_SKIP_INTRO_SOURCE "${THPS_GAME_DIR}/game/skip_intro.cpp")             # the game's own (THPS1: a vtable screen)
 endif()
+# The game's side of the draw distance setting (which frustum, which buffers). A game without one still builds: the setting
+# is then accepted and changes nothing.
+if (EXISTS "${THPS_GAME_DIR}/game/draw_distance.cpp")
+    set(THPS_DRAW_DISTANCE_SOURCE "${THPS_GAME_DIR}/game/draw_distance.cpp")
+else()
+    set(THPS_DRAW_DISTANCE_SOURCE "${THPS_SHARED_DIR}/src/draw_distance_none.cpp")
+endif()
 set(THPS_RUN_STATE_SOURCE "")
 if (THPS_OVERLAYS)   # THPS2/3 (b_is_flip_in_game): the skater-in-control test the controller layer uses reads the game's run flag (versions: gRunActive)
     set(THPS_RUN_STATE_SOURCE "${THPS_SHARED_DIR}/src/run_state.cpp")
@@ -411,6 +418,8 @@ add_executable(${THPS_EXE}
     ${THPS_SHARED_DIR}/src/control.cpp
     ${THPS_SHARED_DIR}/src/gfx_config.cpp
     ${THPS_SHARED_DIR}/src/widescreen.cpp
+    ${THPS_SHARED_DIR}/src/draw_distance.cpp
+    ${THPS_DRAW_DISTANCE_SOURCE}
     ${THPS_SKIP_INTRO_SOURCE}
     ${THPS_RUN_STATE_SOURCE}
     ${THPS_GAME_EXTRA_SOURCES}

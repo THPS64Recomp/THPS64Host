@@ -341,7 +341,7 @@ std::string hfr_perf_text() {
 }
 
 // --control commands:
-//   dltrace                print every command of the next gfx task (dl_inspect's trace)
+//   dltrace [N]            print every command of the next gfx task (or the next N; dl_inspect's trace)
 //   pcap EVERY [DIR]       present captures every EVERY composited frames (0 = off) into DIR
 //                          (default: --dump-dir); PNGs at --present-size
 //   hud                    HUD placement counters (src/hud_anchor.cpp)
@@ -378,7 +378,9 @@ bool hfr_control(const std::string& cmd, std::istringstream& in) {
         return true;
     }
     if (cmd == "dltrace") {
-        int t = int(stats.gfx_tasks.load()) + 2;
+        int t = int(stats.gfx_tasks.load()) + 2, n = 1;
+        in >> n;
+        options.dl_trace_n = std::max(1, n);
         options.dl_trace = t;
         reply("ok dltrace task=" + std::to_string(t));
         return true;

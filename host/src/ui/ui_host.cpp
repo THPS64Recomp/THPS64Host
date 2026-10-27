@@ -23,6 +23,7 @@
 #include "rt64_render_hooks.h"
 #include "ultramodern/config.hpp"
 
+#include "../draw_distance.h"
 #include "../hfr.h"
 #include "../host.h"
 #include "../platform.h"
@@ -58,6 +59,7 @@ std::string gfx_aspect() { return thps::gfx.aspect; }
 std::string gfx_hud() { return thps::gfx.hud; }
 std::string gfx_split() { return thps::gfx.split_wide ? "wide" : "original"; }
 std::string gfx_border() { return thps::gfx.border; }
+std::string gfx_draw_distance() { return thps::dd::mode(); }
 std::string gfx_msaa() { return std::to_string(thps::gfx.msaa); }
 std::string gfx_window() { return thps::gfx.fullscreen ? "fullscreen" : "windowed"; }
 std::string gfx_res_scale() { return std::to_string(thps::gfx.res_scale); }
@@ -451,6 +453,8 @@ void build_models(Rml::Context* ctx) {
         c.BindFunc("show_hud", [](Rml::Variant& v) { v = thps::hud_supported(); });
         bind_string(c, "split", gfx_split, [](const std::string& v) { gfx_changed("split", v); });
         bind_string(c, "border", gfx_border, [](const std::string& v) { gfx_changed("border", v); });
+        bind_string(c, "draw_distance", gfx_draw_distance, [](const std::string& v) { gfx_changed("draw_distance", v); });   // live (src/draw_distance.cpp)
+        c.BindFunc("show_dd", [](Rml::Variant& v) { v = thps::dd::supported(); });   // only where the setting changes something
         bind_string(c, "msaa", gfx_msaa, [](const std::string& v) { gfx_changed("msaa", v); });
         bind_string(c, "window_mode", gfx_window, [](const std::string& v) { gfx_changed("fullscreen", v == "fullscreen" ? "1" : "0"); });
         bind_string(c, "res_scale", gfx_res_scale, [](const std::string& v) { gfx_changed("res_scale", v); });

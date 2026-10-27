@@ -33,6 +33,7 @@ Clock::time_point g_t0;
 thps::IdsTiming g_ids0;
 double g_load0 = 0;
 uint64_t g_erz_ns0 = 0, g_dma_ns0 = 0, g_erz_n0 = 0, g_mem0 = 0;
+uint64_t g_dd_hook_ns0 = 0, g_dd_hook_calls0 = 0, g_dd_task_ns0 = 0, g_gfx0 = 0;
 struct Span { const char* name; double start, ms; };
 std::mutex g_span_mutex;
 std::vector<Span> g_spans;   // thps::ftime_span() while ftime runs (capped: a forgotten `ftime start` must not grow without bound)
@@ -97,6 +98,8 @@ std::string histogram(const char* name, const std::vector<double>& ts) {
 
 namespace thps {
 
+bool ftime_running() { return g_run.load(std::memory_order_relaxed); }
+
 void ftime_span(const char* name, std::chrono::steady_clock::time_point t0) {
     if (!g_run.load(std::memory_order_relaxed)) return;
     const auto now = Clock::now();
@@ -117,6 +120,9 @@ bool frametime_control(const std::string& cmd, std::istringstream& in) {
         g_ids0 = ids_timing();
         g_erz_ns0 = thps::stats.erz_ns.load(), g_dma_ns0 = thps::stats.raw_dma_ns.load(), g_erz_n0 = thps::stats.erz_unpacks.load(), g_mem0 = thps::stats.mem_bytes.load();
         thps::stats.erz_max_ns = 0;
+        g_dd_hook_ns0 = thps::stats.dd_hook_ns.load(), g_dd_hook_calls0 = thps::stats.dd_hook_calls.load(), g_dd_task_ns0 = thps::stats.dd_task_ns.load();
+        g_gfx0 = thps::stats.gfx_tasks.load();
+        thps::stats.dd_hook_max_ns = 0, thps::stats.dd_task_max_ns = 0;
         g_t0 = Clock::now();
         g_thread = std::thread(sample);
         reply("ok ftime started");
@@ -155,6 +161,13 @@ bool frametime_control(const std::string& cmd, std::istringstream& in) {
         std::snprintf(b, sizeof b, " erz_n=%" PRIu64 " erz_ms=%.1f erz_ms_max=%.2f dma_ms=%.1f mem_kb=%" PRIu64, thps::stats.erz_unpacks.load() - g_erz_n0, double(thps::stats.erz_ns.load() - g_erz_ns0) / 1e6,
                       double(thps::stats.erz_max_ns.load()) / 1e6, double(thps::stats.raw_dma_ns.load() - g_dma_ns0) / 1e6,
                       (thps::stats.mem_bytes.load() - g_mem0) / 1024);
+        out += b;
+        // Draw distance's own time per gfx task (game-thread hooks without the game's drawing they call; the gfx thread's note_task)
+        const uint64_t gt = thps::stats.gfx_tasks.load() - g_gfx0;
+        std::snprintf(b, sizeof b, " dd_hook_us_per_task=%.2f dd_hook_us_max=%.1f dd_hook_calls=%" PRIu64 " dd_task_us_avg=%.2f dd_task_us_max=%.1f",
+                      gt ? double(thps::stats.dd_hook_ns.load() - g_dd_hook_ns0) / 1000.0 / double(gt) : 0.0, double(thps::stats.dd_hook_max_ns.load()) / 1000.0,
+                      thps::stats.dd_hook_calls.load() - g_dd_hook_calls0, gt ? double(thps::stats.dd_task_ns.load() - g_dd_task_ns0) / 1000.0 / double(gt) : 0.0,
+                      double(thps::stats.dd_task_max_ns.load()) / 1000.0);
         reply(out + b);
     } else if (sub == "shaders") {
         // RT64's specialised-shader cache (read only; a soak run polls it to see when new shaders appear): `submitted` = distinct shaders RT64 has

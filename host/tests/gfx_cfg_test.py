@@ -13,6 +13,10 @@ Checks, each in a fresh temp config dir:
      is saved and kept, the other keys untouched; a bad value (also the old 1|0 form) is ignored with a message.
   7. border (src/border_crop.cpp): a fresh dir and a file without the key get border=original (the default); --border fill is saved; a bad value
      (also `crop`, the value's name before v0.2 was released: no shim) is ignored with a message.
+  8. dd_buffers (src/draw_distance.cpp): a fresh dir has no dd_buffers line (the default, bigger, is not written); --dd-buffers original is
+     saved and kept, the other keys untouched; --dd-buffers bigger removes the line again; a bad value is ignored with a message.
+  13. draw_distance names (2026-10-26: original | 2x | 4x | full): a file with draw_distance=far / max reads as 2x / 4x and is rewritten
+     with the new name; --draw-distance max is accepted (4x); a bad value is ignored with a message.
 """
 import pathlib, subprocess, sys, tempfile
 
@@ -125,6 +129,34 @@ with tempfile.TemporaryDirectory(prefix="thps-gfx-") as tmp:
     d = tmp / "noborder"; d.mkdir(); (d / "graphics.cfg").write_text("cfg_rev=2\n" + OLD % "16:9")
     rc, out = run(d)
     check(value(d, "border") is None or value(d, "border") == "original", "file without a border line: original")
+
+    d = tmp / "ddbuf"; d.mkdir()
+    run(d)
+    check(value(d, "dd_buffers") is None, "fresh dir: no dd_buffers line (the default, bigger)")
+    rc, out = run(d, "--dd-buffers", "original")
+    check(value(d, "dd_buffers") == "original" and value(d, "hud") == "expand", "--dd-buffers original: saved, the other keys kept")
+    rc, out = run(d)
+    check(value(d, "dd_buffers") == "original", "dd_buffers=original stays on the next start")
+    rc, out = run(d, "--dd-buffers", "bigger")
+    check(value(d, "dd_buffers") is None, "--dd-buffers bigger: the line goes (the default)")
+    (d / "graphics.cfg").write_text((d / "graphics.cfg").read_text() + "dd_buffers=huge\n")
+    rc, out = run(d)
+    check("ignoring dd_buffers=huge" in out, "dd_buffers=huge: ignored with a message (the default applies)")
+
+    # 13. Draw distance names: far and max (before 2026-10-26) are read as 2x and 4x and written with the new names.
+    for old, new in (("far", "2x"), ("max", "4x")):
+        d = tmp / ("dd-" + old); d.mkdir(); run(d)
+        (d / "graphics.cfg").write_text(re.sub(r"(?m)^draw_distance=.*$", "draw_distance=" + old, (d / "graphics.cfg").read_text()))
+        rc, out = run(d)
+        check(value(d, "draw_distance") == new and (" draw_distance=%s " % new) in out, "draw_distance=%s in a file: read as %s, rewritten as %s" % (old, new, new))
+    d = tmp / "dd-flag"; d.mkdir()
+    rc, out = run(d, "--draw-distance", "max")
+    check(value(d, "draw_distance") == "4x", "--draw-distance max: accepted, saved as 4x")
+    rc, out = run(d, "--draw-distance", "2x")
+    check(value(d, "draw_distance") == "2x", "--draw-distance 2x: saved")
+    (d / "graphics.cfg").write_text(re.sub(r"(?m)^draw_distance=.*$", "draw_distance=8x", (d / "graphics.cfg").read_text()))
+    rc, out = run(d)
+    check("ignoring draw_distance=8x" in out, "draw_distance=8x: ignored with a message")
 
 print("\n%s" % ("ALL PASS" if not fails else "%d FAILED" % len(fails)))
 sys.exit(1 if fails else 0)

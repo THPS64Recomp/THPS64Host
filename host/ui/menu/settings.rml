@@ -177,6 +177,20 @@
                             <div class="config-option__details">Where the score, special meter, timer and the like sit when the picture is wider than 4:3. Original keeps them in the 4:3 middle. Menus and pause screens stay centred.</div>
                         </div>
                     </div>
+                    <div class="config-option" data-if="show_dd">
+                        <label class="config-option__title">Draw Distance</label>
+                        <div class="config-option__list">
+                            <input type="radio" name="draw_distance" data-checked="draw_distance" value="original" id="dd_original" />
+                            <label class="config-option__tab-label" id="lbl_dd_original" for="dd_original">Original</label>
+                            <input type="radio" name="draw_distance" data-checked="draw_distance" value="2x" id="dd_2x" />
+                            <label class="config-option__tab-label" id="lbl_dd_2x" for="dd_2x">2x</label>
+                            <input type="radio" name="draw_distance" data-checked="draw_distance" value="4x" id="dd_4x" />
+                            <label class="config-option__tab-label" id="lbl_dd_4x" for="dd_4x">4x</label>
+                            <input type="radio" name="draw_distance" data-checked="draw_distance" value="full" id="dd_full" />
+                            <label class="config-option__tab-label" id="lbl_dd_full" for="dd_full">Full</label>
+                            <div class="config-option__details">How far the course is drawn: Original, 2x, 4x or Full (the whole course). It draws less if the game's buffers fill up. No restart needed. THPS 2 and 3: a longer distance takes full effect after a RETRY, the next course or a camera change.</div>
+                        </div>
+                    </div>
                     <div class="config-option">
                         <label class="config-option__title">Two-Player Split Screen</label>
                         <div class="config-option__list">

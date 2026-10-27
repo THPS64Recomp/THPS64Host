@@ -182,7 +182,7 @@ void thps::inspect_display_list(uint8_t* rdram, uint32_t task, uint32_t ucode, u
     bool ctl = o.control && thps::control_want_dl();
     bool dump_via_ctl = false;
     bool dump = want_dump(task, dump_via_ctl);
-    bool trace = int(task) == o.dl_trace || (dump && o.dl_trace == -2);   // -2: --control dump traces what it dumps
+    bool trace = (o.dl_trace >= 0 && int(task) >= o.dl_trace && int(task) < o.dl_trace + o.dl_trace_n) || (dump && o.dl_trace == -2);   // -2: --control dump traces what it dumps
     if (!log && !dump && !trace && !ctl) return;
     const std::filesystem::path dump_dir = dump_via_ctl ? thps::ctl_dump_dir : o.dump_dir;
 

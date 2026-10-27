@@ -21,7 +21,12 @@ extern "C" {
 // 2: ThpsGameInfo carries the class's front-end overlay table (THPS2/3: built from the user's ROM at first run).
 // 3: game_imports.def gains thps_music_load_song (src/music.cpp).
 // 4: game_imports.def gains thps_memset and thps_memcpy (src/hooks.cpp).
-#define THPS_GAME_ABI 4
+// 5: the draw-distance hooks in game_hooks.def (game/draw_distance.cpp). All three games: thps_world_draw_items (the course items
+//    drawn in passes, so the renderer's fixed lists never drop near meshes), thps_mesh_queue_emit (how full those lists get),
+//    thps_world_set_visibility_in_box and thps_world_find_item (zone-hidden items drawn at Full, event-hidden ones left alone).
+//    THPS1: thps_mem_alloc and thps_gfx_alloc_mtx (bigger matrix pools) and thps_gfx_frame_end (the frame end's reset list).
+//    THPS2/3: thps_mem_alloc and thps_gfx_setup_course (bigger matrix pools and display lists); THPS3 also thps_world_draw_deferred.
+#define THPS_GAME_ABI 5
 
 struct ThpsHostApi {
     uint32_t abi;           // THPS_GAME_ABI

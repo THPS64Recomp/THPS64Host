@@ -66,6 +66,7 @@
 #include <cstdlib>
 
 #include "host.h"
+#include "draw_distance.h"
 #include "platform.h"
 #include "hfr.h"
 #include "versions.h"
@@ -370,6 +371,8 @@ void handle(const std::string& line) {
     } else if (cmd == "quit") {
         reply("ok quit");
         thps::ctl_quit = true;
+    } else if (thps::dd::control(cmd, in)) {
+        // draw distance (src/draw_distance.cpp)
     } else if (thps::hfr_control(cmd, in)) {
         // interpolation / latency commands (src/interpolation.cpp, src/latency.cpp)
     } else {
