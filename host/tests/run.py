@@ -285,7 +285,11 @@ class Session:
                     self.keep(f"{menu}_{index}")
                     return
                 if cur is None:   # cursor blinking or menu still fading in
-                    self.inst.wait_frames(8)
+                    # 7 + the shot's own frame = a poll every 8 frames. Not a multiple of 3: the games triple-buffer, and a shot reads
+                    # RT64's RDRAM copy of the buffer being scanned out. With 9 (8 + 1) every poll landed on the same buffer, and when
+                    # RT64's copy of that one buffer was stale (THPS2 Europe, NY City with draw distance Full: a palette load next to
+                    # the buffer splits RT64's frame) all polls saw a picture without the menu the window was showing.
+                    self.inst.wait_frames(7)
                     continue
                 self.inst.press("DOWN" if (index - cur) % len(m["rows"]) <= len(m["rows"]) // 2 else "UP", 3, 3)
                 self.inst.wait_frames(10)
@@ -577,6 +581,22 @@ class Session:
             self.notes.append(reply)
             if not re.search(st[2], reply):
                 raise StepFail(f"'{st[1]}' replied {reply!r}, expected a match of /{st[2]}/")
+        elif kind == "ctl_same":
+            # ("ctl_same", "COMMAND ...", REGEX, KEY): the reply's REGEX group 1 must be the same as at this session's first ctl_same with KEY
+            # (the first one stores it), e.g. how many course items the set-up scripts named, before and after a RETRY.
+            self.inst.send(st[1])
+            reply = self.inst.expect("ok " + st[1].split()[0], 30)
+            self.notes.append(reply)
+            m = re.search(st[2], reply)
+            if not m:
+                raise StepFail(f"'{st[1]}' replied {reply!r}, expected a match of /{st[2]}/")
+            kept = getattr(self, "ctl_kept", None)
+            if kept is None:
+                kept = self.ctl_kept = {}
+            if st[3] not in kept:
+                kept[st[3]] = m.group(1)
+            elif kept[st[3]] != m.group(1):
+                raise StepFail(f"'{st[1]}': {st[3]} is {m.group(1)!r}, was {kept[st[3]]!r}")
         elif kind == "meter_inside":
             # ("meter_inside",): THPS1's SPECIAL meter on the newest present captures (hud_meter.py): the fill lies inside the frame. The fill pulses, so the
             # newest 6 captures (18 frames) are tried; one with a fill must pass, and at least one must have a fill.
@@ -1518,7 +1538,8 @@ def main() -> int:
         t0 = time.monotonic()
         inst = None
         try:
-            inst = H.Instance(config, sdir / "host.log", rom=rom, extra=extra, control_args=sess.get("control_args"))
+            inst = H.Instance(config, sdir / "host.log", rom=rom, extra=extra, control_args=sess.get("control_args"),
+                              env=sess.get("env"))   # the session's own environment (e.g. THPS_DD_CANARY=1)
             inst.note(f"uptime: {load['uptime']}")
         except Exception as e:  # noqa: BLE001
             for n, what, _ in sess["scenarios"]:

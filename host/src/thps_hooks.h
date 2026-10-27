@@ -44,6 +44,45 @@ int thps_unlock_course(uint8_t* rdram, recomp_context* ctx);
 /* THPS2/3 cheats (game/cheats.cpp): Cheat_IsOn(a0 = cheat index) entry; 1 = answer "on" (the host has that cheat on), 0 = ask the game. */
 int thps_cheat_is_on(uint8_t* rdram, recomp_context* ctx);
 
+/* THPS2/3 World_DrawItems(a0 = item list, a1 = view, a2 = player) entry (game/draw_distance.cpp): with draw distance "full", runs the
+ * function with the items' trigger-visibility bits cleared and puts them back; when it draws more than the game would, the extra items
+ * go first, farthest first, in passes of their own, so the renderer's lists never overflow; returns 1 (skip the body), 0 = run it as is. */
+/* THPS1 World_DrawItems(a0 = world, a1 = view, a2 = player) entry (game/draw_distance.cpp): with a far plane longer than the game's, runs
+ * the function several times (the items beyond the game's far plane in passes, farthest first, then the game's own pass) so each pass fits
+ * the mesh queue; returns 1, or 0 = run it as is. */
+int thps_world_draw_items(uint8_t* rdram, recomp_context* ctx);
+
+/* World_SetVisibilityInBox entry (game/draw_distance.cpp): runs the function and records which hidden bits it set; returns 1. */
+int thps_world_set_visibility_in_box(uint8_t* rdram, recomp_context* ctx);
+
+/* World_FindItem(a0 = list, a1 = name) entry (game/draw_distance.cpp): runs it and marks the found item as event-owned; returns 1. */
+int thps_world_find_item(uint8_t* rdram, recomp_context* ctx);
+
+/* Mesh_QueueEmit entry (game/draw_distance.cpp): notes how full the renderer's lists of one pass are (the queue is full here; past its
+ * size the game drops meshes). THPS1: a0 = the mesh queue (512 entries). THPS2/3: a0 = the renderer, with its mesh queue (THPS2 512,
+ * THPS3 845 entries) and its depth-sorted list of translucent meshes (96). Reads only; the body always runs. */
+void thps_mesh_queue_emit(uint8_t* rdram, recomp_context* ctx);
+
+/* THPS3 World_DrawDeferredItems(a0 = item list) entry (game/draw_distance.cpp): notes how many course items World_DrawItems put on its
+ * list of items drawn after the others (64 slots, which the game does not check). Reads only; the body always runs. */
+void thps_world_draw_deferred(uint8_t* rdram, recomp_context* ctx);
+
+/* Mem_Alloc(a0 = heap, a1 = size, a2 = align) entry (THPS1: Heap_Alloc; game/draw_distance.cpp): enlarges the matrix-pool request of
+ * the gfx set-up (THPS2/3: each course start; THPS1: start-up) when draw distance is on; every other call is left alone. */
+int thps_mem_alloc(uint8_t* rdram, recomp_context* ctx);
+
+/* THPS2/3 Gfx_SetupCourse() entry (game/draw_distance.cpp): the course gfx set-up (each course start and RETRY), which allocates the two
+ * display lists, the matrix pools and the vertex pools. Runs the body with thps_mem_alloc told that the display-list requests are this
+ * set-up's (dd_buffers = bigger: at least 144 KiB each); returns 1. */
+int thps_gfx_setup_course(uint8_t* rdram, recomp_context* ctx);
+
+/* THPS1 Gfx_AllocMtx() entry (game/draw_distance.cpp): the per-frame matrix allocator, whose cap (500) is an immediate. With the pools
+ * enlarged at start-up it hands out matrices up to the bigger cap (v0) and returns 1; otherwise 0, and the game's body runs. */
+int thps_gfx_alloc_mtx(uint8_t* rdram, recomp_context* ctx);
+
+/* THPS1 Gfx_FrameEnd() entry (game/draw_distance.cpp): notes how many entries the frame put on the list of matrix pointers the frame end
+ * clears (about 2000 slots, which the game does not check). Reads only; the body always runs. */
+void thps_gfx_frame_end(uint8_t* rdram, recomp_context* ctx);
 /* Music_LoadSong(a0 = music player, a1 = song) entry: the old song's channels still reading the song buffer stop without
  * reading it again before the next song is copied over it. src/music.cpp */
 void thps_music_load_song(uint8_t* rdram, recomp_context* ctx);

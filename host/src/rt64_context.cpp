@@ -32,6 +32,7 @@
 #include "ultramodern/renderer_context.hpp"
 
 #include "host.h"
+#include "draw_distance.h"
 #include "hfr.h"
 #include "platform.h"
 
@@ -519,6 +520,7 @@ public:
         thps::fix_display_list(app->core.RDRAM, task->t.data_ptr);
         thps::crop_display_list(app->core.RDRAM, task->t.data_ptr);   // graphics setting border=fill (src/border_crop.cpp)
         thps::inspect_display_list(app->core.RDRAM, uint32_t(n), task->t.ucode, task->t.data_ptr, task->t.data_size);
+        thps::dd::note_task(app->core.RDRAM, task->t.data_ptr, task->t.data_size);   // src/draw_distance.cpp: buffer high-water marks
         app->state->rsp->reset();
         app->interpreter->loadUCodeGBI(task->t.ucode & 0x3FFFFFF, task->t.ucode_data & 0x3FFFFFF, true);
         thps::hfr_task_begin(app->state.get(), app->core.RDRAM, task->t.data_ptr & 0x3FFFFFF);  // src/interpolation.cpp

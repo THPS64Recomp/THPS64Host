@@ -59,7 +59,8 @@ class Instance:
     """One running <game>_recomp --control. Only one may run at a time (see run.py lock)."""
 
     def __init__(self, config: Path, log_path: Path, rom: str | None = None, extra: list[str] | None = None,
-                 binary: Path = BINARY, line_hook=None, control_args: list[str] | None = None):
+                 binary: Path = BINARY, line_hook=None, control_args: list[str] | None = None,
+                 env: dict[str, str] | None = None):
         self.line_hook = line_hook   # called with every host output line, on the reader thread (the soak test's monitor, tests/soak.py)
         # control_args: replaces the default "--no-keyboard --no-pads --mute" (the soak test plays through a virtual pad with real audio at volume 0)
         self.log_path = log_path
@@ -71,6 +72,8 @@ class Instance:
         self.args = args
         self._log = open(log_path, "w", buffering=1)
         self._log.write("# " + " ".join(args) + "\n")
+        if env:   # a session's own environment variables (run.py `env`: e.g. THPS_DD_CANARY=1), on top of this process's
+            self._log.write("# env: " + " ".join(f"{k}={v}" for k, v in env.items()) + "\n")
         self._lines: "queue.Queue[str]" = queue.Queue()
         self.perf: list[tuple[float, float]] = []   # (t, fps) from "[thps] perf" lines
         self.pak_events: list[str] = []
@@ -82,7 +85,8 @@ class Instance:
         self.start_time = time.monotonic()
         # Binary pipes wrapped as text: the protocol is "\n"-terminated lines on every OS (a text-mode pipe would write
         # "\r\n" on Windows).
-        self.proc = subprocess.Popen(args, cwd=HOST_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0)
+        self.proc = subprocess.Popen(args, cwd=HOST_DIR, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0,
+                                     env={**os.environ, **env} if env else None)
         self.proc.stdin = io.TextIOWrapper(self.proc.stdin, encoding="utf-8", newline="\n", write_through=True)
         self.proc.stdout = io.TextIOWrapper(self.proc.stdout, encoding="utf-8", errors="replace", newline="\n")
         self._reader = threading.Thread(target=self._read, daemon=True)
@@ -111,7 +115,7 @@ class Instance:
             m = self._fps_re.match(line)
             if m:
                 self.fps_overlay.append((time.monotonic() - self.start_time, float(m.group(1)), float(m.group(2))))
-            if line.startswith(("[thps] skip intro", "[thps] input", "[thps] launcher", "[thps] check-rom", "[thps] gfx:", "[thps] settings:", "[thps] hfr camera cut", "[thps] cheats", "[thps] music")):
+            if line.startswith(("[thps] skip intro", "[thps] input", "[thps] launcher", "[thps] check-rom", "[thps] gfx:", "[thps] settings:", "[thps] hfr camera cut", "[thps] cheats", "[thps] draw distance", "[thps] music")):
                 self.other_lines.append(line)
             m = self._watch_re.match(line)
             if m:   # answered by the game thread at the poll where the word changed: kept aside so expect() never swallows it

@@ -10,10 +10,12 @@
 // The recompiled View_ComputeCullPlanes is called by its (version-specific) address: thps::call_guest.
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "recomp.h"
 #include "thps_hooks.h"
+#include "draw_distance.h"
 #include "host.h"
 #include "versions.h"
 
@@ -75,11 +77,27 @@ extern "C" int thps_view_set_frustum(uint8_t* rdram, recomp_context* ctx) {
     if (inside) return 0;
     static std::atomic<uint64_t> calls{0};
     auto f32 = [](uint64_t r) { float f; uint32_t w = uint32_t(r); std::memcpy(&f, &w, 4); return f; };
-    if (thps::verbose() && calls.fetch_add(1) < 40) {
+    static const uint64_t log_calls = std::getenv("THPS_FRUSTUM_LOG") ? std::strtoull(std::getenv("THPS_FRUSTUM_LOG"), nullptr, 10) : 40;   // exploration: more calls
+    if (thps::verbose() && calls.fetch_add(1) < log_calls) {
         const uint32_t sp = uint32_t(ctx->r29);
         std::printf("[thps] View_SetFrustum view 0x%08X l %.3f r %.3f b %.3f t %.3f n %.3f f %.1f\n", uint32_t(ctx->r4), f32(ctx->r5),
                     f32(ctx->r6), f32(ctx->r7), load_f32(rdram, sp + 0x10), load_f32(rdram, sp + 0x14), load_f32(rdram, sp + 0x18));
         std::fflush(stdout);
+    }
+    // Extended draw distance (src/draw_distance.cpp, off by default): the gameplay camera's far plane, scaled. The function runs with
+    // the scaled far (stack argument) and the caller's slot is put back, like the cull-plane widening above.
+    {
+        const uint32_t sp = uint32_t(ctx->r29);
+        const float f = load_f32(rdram, sp + 0x18);
+        const float f2 = thps::dd::far_plane(rdram, f);
+        if (f2 != f) {
+            store_f32(rdram, sp + 0x18, f2);
+            inside = true;
+            thps::call_guest(thps::sym().View_SetFrustum, rdram, ctx);
+            inside = false;
+            store_f32(rdram, sp + 0x18, f);
+            return 1;
+        }
     }
     // Not widened any more (Q17). Widening this frustum (its +0x120 matrix) changed where the
     // game puts the camera: on one paused Warehouse frame at 21:9 the camera sat visibly closer to

@@ -18,7 +18,8 @@
 //                     [--no-pak] [--rumble-pak] [--si-requeue] [--save-dir DIR] [--rt64-dump-every N] [--rt64-dump-frames a,b]
 //                     [--present-dump-every N] [--present-size WxH] [--present-pair] [--hidden]
 //                     [--aspect original|16:9|21:9|expand] [--window WxH] [--res-scale N] [--msaa N] [--fullscreen]
-//                     [--hud original|16:9|expand] [--split wide|original]
+//                     [--hud original|16:9|expand] [--split wide|original] [--border original|fill]
+//                     [--draw-distance original|2x|4x|full] [--dd-buffers bigger|original]
 //                     [--skip-intro|--no-skip-intro] [--show-fps|--no-show-fps] [--volume N] [--check-rom PATH]
 //                     [--version ID] [--tv pal|ntsc|mpal]
 //                     cheats (test aids, src/cheats.cpp; the ones the game has): [--unlock-levels] [--perfect-balance] [--slow-motion] [--skip-to-restart] [--always-special]
@@ -515,6 +516,8 @@ int main(int argc_in, char** argv_in) {
         else if (arg("--hud")) gfx_overrides.emplace_back("hud", argv[++i]);
         else if (arg("--split")) gfx_overrides.emplace_back("split", argv[++i]);
         else if (arg("--border")) gfx_overrides.emplace_back("border", argv[++i]);
+        else if (arg("--draw-distance")) gfx_overrides.emplace_back("draw_distance", argv[++i]);
+        else if (arg("--dd-buffers")) gfx_overrides.emplace_back("dd_buffers", argv[++i]);
         else if (arg("--controls-preset")) controls_preset = argv[++i];
         else if (flag("--fullscreen")) gfx_overrides.emplace_back("fullscreen", "1");
         else if (flag("--windowed")) gfx_overrides.emplace_back("fullscreen", "0");

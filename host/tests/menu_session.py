@@ -468,4 +468,23 @@ MENU_SESSIONS = [
             ("ui", "esc"),
         ]),
     ]),
+    # The menu's Draw Distance radio (graphics.cfg `draw_distance`, written only when not original; src/draw_distance.cpp): live, saved.
+    dict(name="menu-dd", config="menu-dd-config", fresh_pak=True, wav=False, requires="menu",
+         fresh_files=["general.cfg", "graphics.cfg", "controls.cfg", "controls.cfg.bak", "controls.preset", "ui-hint-shown"],
+         args=["--skip-intro", "--hidden", "--window", "1280x720"], scenarios=[
+        ("menu_dd_click", "Draw Distance (Graphics tab): 2x, then Full, then Original -> graphics.cfg draw_distance=... and the host", [
+            ("ui", "esc"),
+            ("ui_state", "open=1"),
+            ("ui", "tab 2"),
+            ("ui", "click #lbl_dd_2x"),
+            ("file_contains", "graphics.cfg", r"(?m)^draw_distance=2x$"),
+            ("log", r"draw distance: 2x"),
+            ("ui", "click #lbl_dd_full"),
+            ("file_contains", "graphics.cfg", r"(?m)^draw_distance=full$"),
+            ("log", r"gfx: aspect=.* draw_distance=full"),
+            ("ui", "click #lbl_dd_original"),
+            ("log", r"draw distance: original"),
+            ("ui", "esc"),
+        ]),
+    ]),
 ]
