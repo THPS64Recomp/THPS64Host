@@ -26,6 +26,23 @@ if python3 -c '' >/dev/null 2>&1; then PY=python3
 elif py -3 -c '' >/dev/null 2>&1; then PY="py -3"
 elif python -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1; then PY=python
 else echo "Python 3.11 or newer was not found" >&2; exit 2; fi
+# The ROM paths ($THPS<N>_ROM, $THPS<N>_ROM_EU, ...). Git Bash turns a /c/... path into C:/... in a native program's arguments, but
+# not in its environment, so the game can't open a Git Bash path given this way: convert it. Then check that each file exists.
+ROMVARS=$(env | sed -n "s/^\(${UPPER}_ROM[A-Z0-9_]*\)=.*/\1/p")
+case "${1:-}" in --controls-cfg|--gfx-cfg|--soak-summary) ROMVARS= ;; esac   # these need no ROM
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) WINSH=1 ;; *) WINSH= ;; esac
+for v in $ROMVARS; do
+    eval "p=\$$v"
+    was=
+    if [ -n "$WINSH" ] && command -v cygpath >/dev/null 2>&1; then
+        case "$p" in /*) was=" (from $p)"; p=$(cygpath -m "$p"); eval "export $v=\"\$p\"" ;; esac
+    fi
+    if [ ! -f "$p" ]; then
+        echo "$v=$p$was: no such file." >&2
+        case "$WINSH$p" in 1/*) echo "In Git Bash, write the Windows path: export $v=\"C:/path/to/dump.z64\"" >&2 ;; esac
+        exit 2
+    fi
+done
 # The first-run tests need the SPLIT engine (build/cmake-split: -DTHPS_SPLIT_GAME_LIB=ON); the static build (build/cmake) has no first run.
 # $<GAME>_BINARY overrides; otherwise build/cmake-split when it exists.
 if [ "${1:-}" = "--first-run" ]; then
@@ -33,7 +50,8 @@ if [ "${1:-}" = "--first-run" ]; then
     eval "BIN=\${${UPPER}_BINARY:-}"
     if [ -z "$BIN" ]; then
         if [ -x "$HERE/build/cmake-split/${FAMILY}_recomp" ]; then BIN="$HERE/build/cmake-split/${FAMILY}_recomp"
-        else echo "no split engine: build build/cmake-split first (cmake -DTHPS_SPLIT_GAME_LIB=ON, see README), or set ${UPPER}_BINARY" >&2; exit 2; fi
+        else echo "--first-run tests the split engine, and it isn't built ($HERE/build/cmake-split)." >&2
+             echo "Build it first: python3 -I decomp/$FAMILY/recomp-host/tools/build_host.py --split (on Windows: python), or set ${UPPER}_BINARY" >&2; exit 2; fi
     fi
     # Windows: name the .exe. Git Bash's `test -x` accepts the bare name, but the tests copy the app by this exact path.
     if [ -f "$BIN.exe" ]; then BIN="$BIN.exe"; fi
@@ -57,7 +75,7 @@ if [ "${1:-}" = "--soak" ]; then
 fi
 eval "BIN=\${${UPPER}_BINARY:-$HERE/build/cmake/${FAMILY}_recomp}"
 if [ -f "$BIN.exe" ]; then BIN="$BIN.exe"; fi
-test -x "$BIN" || { echo "build first: cmake --build build/cmake (see README), or set ${UPPER}_BINARY" >&2; exit 2; }
+test -x "$BIN" || { echo "no game build at $BIN. Build it first: python3 -I decomp/$FAMILY/recomp-host/tools/build_host.py --rom <your dump> (on Windows: python; BUILDING.md), or set ${UPPER}_BINARY" >&2; exit 2; }
 if [ "${1:-}" = "--controls-cfg" ]; then exec $PY -I "$HERE/tests/controls_cfg_test.py" "$BIN"; fi
 if [ "${1:-}" = "--gfx-cfg" ]; then exec $PY -I "$HERE/tests/gfx_cfg_test.py" "$BIN"; fi
 if [ "$#" -eq 0 ]; then $PY -I "$HERE/tests/controls_cfg_test.py" "$BIN"; $PY -I "$HERE/tests/gfx_cfg_test.py" "$BIN"; fi

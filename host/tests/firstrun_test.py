@@ -332,12 +332,13 @@ def rom_error_scenarios(c: Ctx):
 def picker_bypass(c: Ctx):
     """With --rom (or a stored ROM) and a current library no window opens at all, and the game starts."""
     cfg = c.cfg("bypass", with_library=True)
-    rc, out = c.run(["--rom", str(ROM_MAIN), "--config", str(cfg)], shots="bypass")
+    gs = 8 if IS_WINDOWS else 0   # a launch that presents nothing before --seconds exits 1; a slower Windows PC can take past 3 s (as in app_update)
+    rc, out = c.run(["--rom", str(ROM_MAIN), "--config", str(cfg)], shots="bypass", game_seconds=gs)
     check(rc == 0, f"exit {rc}\n{out}")
     check(not pages(out), f"a first-run page was shown: {pages(out)}\n{out}")
     check("[thps] quit" in out, out)
     # no --rom: the stored copy is used
-    rc, out = c.run(["--config", str(cfg)])
+    rc, out = c.run(["--config", str(cfg)], game_seconds=gs)
     check(rc == 0 and not pages(out), f"stored-ROM start: exit {rc}, pages {pages(out)}\n{out}")
     return "no window with --rom or a stored ROM"
 
