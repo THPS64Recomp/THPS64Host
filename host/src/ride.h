@@ -17,5 +17,6 @@ void ride_hold(bool enabled);   // test capture fence: stop at the next read aft
 bool ride_is_held();
 void ride_quit();
 std::string ride_status();
+uint64_t ride_position();   // inputs played so far (0 when not playing): the draw distance digest aligns its records to it
 void ride_on_read(bool* present, uint16_t* buttons, float* x, float* y);   // game thread, each port 1 read (get_input)
 }

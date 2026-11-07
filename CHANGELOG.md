@@ -8,6 +8,14 @@ release, the release lists it under a **Games must** heading.
 ## [Unreleased]
 
 ### Added
+- A shared trigger-box classifier for the games' draw distance. It separates distance culling from course state and leaves
+  incomplete or unknown trigger data under the game's control. Node types the games don't define, and command or box data
+  that would run past RDRAM or past its command, count as incomplete.
+- Shared zone ownership (`src/zone_ownership.*`) and the THPS2/THPS3 draw distance engine (`src/draw_distance_thps23.*`), with
+  the guest-memory helpers they use. At Full, draw distance clears only the hidden bits the culling boxes set. Items an event
+  named, state boxes and rooms (zones a course hides from its own doors) stay under the game's control.
+- An opt-in draw distance decision digest for comparing replays (`THPS_DD_DIGEST=1`, control command `dd digest PATH`).
+- A hook declaration for a game's scene-object pass (`thps_scene_objects_draw`).
 - Recorded rides for tests: record port 1's input from a course start and play it back (`--ride-record`, `--ride-play` and the
   control command `ride`). Harness steps play a complete ride before capturing its end frame. Ride files hold controller
   inputs only.
@@ -22,6 +30,7 @@ release, the release lists it under a **Games must** heading.
   and split CMake configurations.
 
 ### Games must
+- A game with `game/draw_distance.cpp` defines `thps::zones::profile()` there; the host builds `src/zone_ownership.cpp` with it.
 - Experimental configured-timing profiles must supply distinct override, float-output and integer-output words, with the
   paired end after both guest outputs. Profiles without them remain unsupported for configured rides.
 

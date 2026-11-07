@@ -52,6 +52,9 @@ int thps_cheat_is_on(uint8_t* rdram, recomp_context* ctx);
  * the mesh queue; returns 1, or 0 = run it as is. */
 int thps_world_draw_items(uint8_t* rdram, recomp_context* ctx);
 
+/* Scene-object render entry: extend model distance thresholds for this call, restoring the borrowed scale on return. */
+int thps_scene_objects_draw(uint8_t* rdram, recomp_context* ctx);
+
 /* World_SetVisibilityInBox entry (game/draw_distance.cpp): runs the function and records which hidden bits it set; returns 1. */
 int thps_world_set_visibility_in_box(uint8_t* rdram, recomp_context* ctx);
 

@@ -43,6 +43,7 @@ std::string g_path;
 uint64_t g_gen = 0;             // the course start the ride is waiting for (armed: the one current when armed)
 std::vector<Read> g_reads;
 size_t g_next = 0;              // playback: the next line
+std::atomic<uint64_t> g_position{0};   // g_next for readers outside the lock (ride_position: the draw distance digest)
 uint64_t g_done = 0;            // finished ride attempts (recorded or played)
 bool g_write_failed = false;
 bool g_start_run = false;  // games with gRunActive start after the goals sheet, at the first run input read
@@ -403,6 +404,7 @@ bool thps::ride_play(const std::string& path) {
     sync_step_enabled();
     g_reads = std::move(reads);
     g_path = path, g_next = 0, g_states = {};
+    g_position.store(0, std::memory_order_relaxed);
     reset_trace();
     g_gen = thps::dd::course_generation();
     g_write_failed = false;
@@ -519,9 +521,12 @@ void thps::ride_on_read(bool* present, uint16_t* buttons, float* x, float* y) {
             finish_locked("the end of the ride"); wait_hold_locked(lock); return;
         }
         const Read& r = g_reads[g_next++];
+        g_position.store(g_next, std::memory_order_relaxed);
         *present = r.present, *buttons = r.buttons, *x = r.x, *y = r.y;
     }
 }
+
+uint64_t thps::ride_position() { return g_position.load(std::memory_order_relaxed); }
 
 void thps::ride_quit() {
     std::lock_guard lock{g_mutex};

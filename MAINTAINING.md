@@ -51,8 +51,8 @@ A pull request from outside gets its tier 2 run by a maintainer before it's merg
 One command for each repository. It prints each step, a `Fix:` line for each failure, and ends with "Ready for a PR."
 
 - **`tools/check.sh`** (contributor mode, no ROM): the host pin, the version tables, a build with stand-in game
-  functions (in `build/cmake-check`, so your real build is left alone), the six ROM-free CTest regressions
-  (`ride_v3_format`, `ride_step_state`, `ride_step_profile`, `ride_harness`, `ride_step_runtime`, and `input_events`),
+  functions (in `build/cmake-check`, so your real build is left alone), the eight ROM-free CTest regressions
+  (`trigger_zones`, `zone_ownership`, `ride_v3_format`, `ride_step_state`, `ride_step_profile`, `ride_harness`, `ride_step_runtime`, and `input_events`),
   and the ROM-free checks CI runs (`--features`, `--check-rom` of an empty file exits 3, the controls.cfg test). In
   THPS64Host it checks each game cloned next to it (`../THPS1-64Recomp`, ...) against your host, as the host CI does, with one shared runtime (`build/runtime`, or
   `THPS_RUNTIME_DIR`). It warns about each game that isn't cloned there, with the clone command, and its last line names

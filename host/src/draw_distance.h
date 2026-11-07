@@ -2,6 +2,7 @@
 #pragma once
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -138,5 +139,22 @@ public:
         if (on_) note_hook_time(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0_).count()) - guest_ns_);
     }
 };
+
+// Decision digest (tests; THPS_DD_DIGEST=1, or =items for one line per item as well; off by default, and then each hook pays one test).
+// The game's side hashes each hook's decisions into one record (draw call, box call, find, set-up, allocation); every record carries the
+// course generation and the ride's input position, so two replays of one ride compare record by record. `dd digest PATH` writes them
+// (control thread), one line each, and replies with the count and a hash over the whole stream.
+namespace digest {
+bool on();
+bool items();
+struct Hash {
+    uint64_t h = 1469598103934665603ull;   // FNV-1a, 64-bit
+    void u(uint64_t v) { for (int k = 0; k < 8; k++) h = (h ^ ((v >> (8 * k)) & 0xFF)) * 1099511628211ull; }
+    void f(float x) { uint32_t b; std::memcpy(&b, &x, 4); u(b); }
+};
+void record(char kind, uint32_t view, const Hash& h, const std::string& detail = std::string());   // game thread
+void item_line(const std::string& line);                                                            // game thread, with items()
+std::string write(const std::string& path);                                                         // control thread
+}  // namespace digest
 
 }  // namespace thps::dd
