@@ -28,6 +28,8 @@ release, the release lists it under a **Games must** heading.
   are refused. Legacy v1/v2 ride files keep their timing. Game-library ABI 7: cached game libraries are rebuilt.
 - `tools/check.sh --maintainer` now runs the Windows MinGW compile check and passes the selected host root to both the normal
   and split CMake configurations.
+- macOS CI and release builds run on GitHub's macos-15 image, as macos-14 is no longer offered. Releases still
+  support macOS 13 and later.
 
 ### Games must
 - A game with `game/draw_distance.cpp` defines `thps::zones::profile()` there; the host builds `src/zone_ownership.cpp` with it.

@@ -121,7 +121,7 @@ jobs:
             cc: clang-cl
             cxx: clang-cl
           - os: macos arm64
-            runner: macos-14
+            runner: macos-15
             cc: clang
             cxx: clang++
     defaults:
