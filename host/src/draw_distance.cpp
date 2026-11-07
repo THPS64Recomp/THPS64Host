@@ -39,6 +39,7 @@
 
 #include "draw_distance.h"
 #include "host.h"
+#include "ride.h"
 
 namespace thps::dd {
 namespace {
@@ -163,6 +164,61 @@ void note_course_start() {
 }
 
 uint64_t course_generation() { return g_course_starts.load(); }
+
+// Decision digest (tests; draw_distance.h). Records are kept in memory and written only on request, so recording adds no file work to
+// the game thread.
+namespace digest {
+namespace {
+struct Record {
+    char kind;
+    uint32_t view;
+    uint64_t gen, pos, hash;
+    std::string detail;
+};
+std::mutex g_mutex;
+std::vector<Record> g_records;
+std::vector<std::string> g_items;
+int level() {
+    static const int l = [] {
+        const char* e = std::getenv("THPS_DD_DIGEST");
+        return !e || !*e || std::strcmp(e, "0") == 0 ? 0 : std::strcmp(e, "items") == 0 ? 2 : 1;
+    }();
+    return l;
+}
+}  // namespace
+bool on() { return level() > 0; }
+bool items() { return level() > 1; }
+void record(char kind, uint32_t view, const Hash& h, const std::string& detail) {
+    if (!on()) return;
+    std::lock_guard lock{g_mutex};
+    g_records.push_back({kind, view, course_generation(), thps::ride_position(), h.h, detail});
+    if (items()) g_items.push_back("-- " + std::to_string(g_records.size() - 1));
+}
+void item_line(const std::string& line) {
+    if (!items()) return;
+    std::lock_guard lock{g_mutex};
+    g_items.push_back(line);
+}
+std::string write(const std::string& path) {
+    std::lock_guard lock{g_mutex};
+    if (!on()) return "off";
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f) return "err cannot write " + path;
+    Hash all;
+    for (size_t i = 0; i < g_records.size(); i++) {
+        const Record& r = g_records[i];
+        all.u(uint64_t(uint8_t(r.kind))), all.u(r.view), all.u(r.gen), all.u(r.pos), all.u(r.hash);
+        for (char c : r.detail) all.u(uint64_t(uint8_t(c)));
+        std::fprintf(f, "%zu %c gen=%llu pos=%llu view=%u %016llx %s\n", i, r.kind, (unsigned long long)r.gen, (unsigned long long)r.pos, r.view,
+                     (unsigned long long)r.hash, r.detail.c_str());
+    }
+    for (const std::string& s : g_items) std::fprintf(f, "%s\n", s.c_str());
+    const bool ok = std::fclose(f) == 0;
+    char b[96];
+    std::snprintf(b, sizeof b, "records=%zu hash=%016llx%s", g_records.size(), (unsigned long long)all.h, ok ? "" : " write-failed");
+    return b;
+}
+}  // namespace digest
 
 namespace {
 // How far the factor in use can go now: the setting, the course's learned ceiling, and the far plane's own limit (dd_game_far clamps
@@ -456,10 +512,16 @@ bool control(const std::string& cmd, std::istringstream& in) {
                 feedback_locked(pct / 100.0f, false, g_gen.load(), nullptr);
             }
         }
+    } else if (sub == "digest") {
+        std::string path;
+        in >> path;
+        if (path.empty()) { reply("err dd digest PATH"); return true; }
+        reply("ok dd digest " + digest::write(path));
+        return true;
     } else if (sub == "reset") {
         g_in_use_min = 64.0f, g_dl_hw = 0, g_mtx_hw = 0, g_vtx_hw = 0, g_queue_hw = 0, g_blend_hw = 0, g_defer_hw = 0, g_reset_hw = 0, g_runs_hw = 0, g_tasks = 0, g_backoffs = 0, g_panics = 0, g_scaled = 0, g_mtx_capped = 0, g_cuts = 0, g_cut_items = 0, g_late_cuts = 0, g_stale_dropped = 0, g_settle_dropped = 0;
     } else if (!sub.empty()) {
-        reply("err dd [mode M | factor X | testcap PCT | showall 0|1|all|auto | item N | heap [reset] | dlbudget CAP REST PASS MARGIN | dlprobe [reset] | stale PCT | feed PCT | own N | reset]");
+        reply("err dd [mode M | factor X | testcap PCT | showall 0|1|all|auto | item N | heap [reset] | dlbudget CAP REST PASS MARGIN | dlprobe [reset] | stale PCT | feed PCT | own N | digest PATH | reset]");
         return true;
     }
     reply("ok dd " + stats());

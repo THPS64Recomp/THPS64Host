@@ -54,7 +54,7 @@ cat > "$TMP/expected" <<'EOF'
 -C
 Release
 -R
-^(ride_v3_format|ride_step_state|ride_step_profile|ride_harness|ride_step_runtime|input_events)$
+^(trigger_zones|zone_ownership|ride_v3_format|ride_step_state|ride_step_profile|ride_harness|ride_step_runtime|input_events)$
 --no-tests=error
 --output-on-failure
 EOF
