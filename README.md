@@ -3,7 +3,7 @@
 The shared host of the THPS64Recomp ports:
 [THPS1 64: Recompiled](https://github.com/THPS64Recomp/THPS1-64Recomp),
 [THPS2 64: Recompiled](https://github.com/THPS64Recomp/THPS2-64Recomp) and
-[THPS3 64: Recompiled](https://github.com/THPS64Recomp/THPS3-64Recomp) (both early previews). It holds the engine that runs the N64 games' code
+[THPS3 64: Recompiled](https://github.com/THPS64Recomp/THPS3-64Recomp). It holds the engine that runs the N64 games' code
 after [N64Recomp](https://github.com/N64Recomp/N64Recomp) has translated it, on
 [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime) and [RT64](https://github.com/rt64/rt64).
 
