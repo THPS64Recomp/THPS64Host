@@ -7,7 +7,7 @@
 #   preflight  inputs; decomp/common is an official host release (check_host_pin.sh); the CHANGELOG has a dated [VERSION] section
 #              (release_notes.py); the tag and any draft match the commit being built (release_guard.sh). Fails in a minute, not after
 #              an hour of builds.
-#   engine     (macos-14 arm64, macos-15-intel x86_64, natively) own SDL2 (tools/build_sdl2.py, pinned, SHA-256 checked) -> pinned runtime
+#   engine     (macos-15 arm64, macos-15-intel x86_64, natively) own SDL2 (tools/build_sdl2.py, pinned, SHA-256 checked) -> pinned runtime
 #              + our RT64 patches -> N64Recomp + RSPRecomp at the pin -> the engine with -DTHPS_SPLIT_GAME_LIB=ON (no ROM, no generated C,
 #              no game code at all) -> smoke test
 #   package    lipo the two slices -> tools/package_split.py (the .app, ad-hoc signed, hardened runtime + entitlements) -> zip with ditto
@@ -115,7 +115,7 @@ jobs:
     needs: preflight
     name: engine (${{ inputs.game }}, ${{ matrix.arch }})
     # Native builds: the Intel image is the last one GitHub offers (macos-13 was retired in December 2025).
-    runs-on: ${{ matrix.arch == 'arm64' && 'macos-14' || 'macos-15-intel' }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'macos-15' || 'macos-15-intel' }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -238,7 +238,7 @@ jobs:
 
   package:
     needs: engine
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 60
     permissions:
       contents: write          # the draft release (gh release create/upload); nothing else
