@@ -7,6 +7,11 @@ release, the release lists it under a **Games must** heading.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-07
+
+Recorded rides for tests, one shared draw distance zone engine and three rendering fixes, used by the v0.3 releases of
+all three games.
+
 ### Added
 - A shared trigger-box classifier for the games' draw distance. It separates distance culling from course state and leaves
   incomplete or unknown trigger data under the game's control. Node types the games don't define, and command or box data
@@ -196,6 +201,7 @@ The first release, used by THPS1 64: Recompiled v0.1.0 and the THPS2 and THPS3 v
   (`ultramodern-sp-complete-after-dl.patch`).
 - Windows: the settings migration was never saved, and the frame-interpolation time budget never applied.
 
-[Unreleased]: https://github.com/THPS64Recomp/THPS64Host/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/THPS64Recomp/THPS64Host/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/THPS64Recomp/THPS64Host/releases/tag/v0.3.0
 [0.2.0]: https://github.com/THPS64Recomp/THPS64Host/releases/tag/v0.2.0
 [0.1.0]: https://github.com/THPS64Recomp/THPS64Host/releases/tag/v0.1.0
