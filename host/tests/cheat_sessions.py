@@ -27,7 +27,7 @@ def cheat_sessions(boot, to_level, to_pak_save, trick):
         dict(name="cheats-on-level", config="cheats-on-level-config", fresh_files=["cheats.cfg"], fresh_pak=True, wav=False, args=["--skip-intro"] + cheats, scenarios=[
             ("cheats_on_level", "in the first level: Slow-Nic quarters the step on trick frames; Always Special and Skip To Restart are asked and 'on'", [
                 *boot, *to_level, ("wait", 30),
-                ("vpad", "attach"),
+                ("vpad", "attach"), ("vpress", "a"),
                 ("skater_watch", 60, trick, ["Skater_PhysState", "@gTimeScale"], ("some", "@gTimeScale", 64)),
                 ("ctl", "vpad axis lefty 0"), ("ctl", "vpad axis leftx 0"),
                 ("cheat_yes", "slow_motion", 1),

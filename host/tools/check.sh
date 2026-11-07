@@ -57,6 +57,9 @@ fail() {   # $1 = what failed, $2 = how to fix it
 }
 refuse() { printf '\ncheck.sh: %s\n' "$1" >&2; exit 2; }
 
+# The helper is also exercised with a mocked ctest by host/tests/check_ctest_test.sh.
+. "$HOSTROOT/host/tools/rom_free_ctest.sh"
+
 # Python 3.11+: python3, else (Windows, Git Bash) the py launcher. Windows' "python3" may be the Microsoft Store stub.
 if python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1; then PY=python3
 elif py -3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1; then PY="py -3"
@@ -202,10 +205,17 @@ dumps and their SHA-1s are in the game's README."
         step "host pin (decomp/common and the workflows name the same THPS64Host release)"
         wtag=$(sed -n 's/^ *host-tag: *\(v[0-9][0-9.]*\).*/\1/p' "$R/.github/workflows/ci.yml" | head -1)
         pin=$(git -C "$R" ls-tree HEAD decomp/common 2>/dev/null | awk '{print $3}')
-        tagc=$(git -C "$R/decomp/common" rev-parse -q --verify "refs/tags/$wtag^{commit}" 2>/dev/null || true)
-        now=$(git -C "$R/decomp/common" rev-parse -q --verify HEAD 2>/dev/null || true)
+        # Ask decomp/common only when it is a checkout of its own: in an empty submodule folder git falls through to the game
+        # repository, whose own tag of the same name (THPS1 has v0.2.0) is not the host's.
+        tagc= now=
+        if [ -e "$R/decomp/common/.git" ]; then
+            tagc=$(git -C "$R/decomp/common" rev-parse -q --verify "refs/tags/$wtag^{commit}" 2>/dev/null || true)
+            now=$(git -C "$R/decomp/common" rev-parse -q --verify HEAD 2>/dev/null || true)
+        fi
         if [ -z "$pin" ]; then
             fail "no committed submodule at decomp/common" "git submodule update --init, then git -C decomp/common checkout $wtag && git add decomp/common"
+        elif [ ! -e "$R/decomp/common/.git" ]; then
+            note "decomp/common isn't checked out, so the pin can't be checked here (CI checks it). To check it: git submodule update --init"
         elif [ -z "$tagc" ]; then
             note "THPS64Host tag $wtag isn't in your decomp/common checkout, so this can't be checked here (CI checks it). To check it: git -C decomp/common fetch --tags"
         elif [ "$pin" != "$tagc" ]; then
@@ -241,6 +251,8 @@ dumps and their SHA-1s are in the game's README."
         EXE=$H/build/cmake-check/${G}_recomp
         [ -f "$EXE.exe" ] && EXE=$EXE.exe
 
+        run_rom_free_ctests "$H/build/cmake-check"
+
         # 4. The ROM-free checks of the binary, as CI runs them.
         step "ROM-free checks of the binary"
         if "$EXE" --features >/dev/null 2>&1; then ok "--features"
@@ -250,6 +262,8 @@ dumps and their SHA-1s are in the game's README."
         rc=$?
         if [ "$rc" = 3 ]; then ok "--check-rom on an empty file exits 3 (not a ROM)"
         else fail "--check-rom on an empty file exited $rc, 3 expected" "the ROM checks in the host's src/ must reject a file that isn't a ROM with exit code 3; run: $EXE --check-rom <empty file>"; fi
+        if $PY -I "$THPS_HOST_ROOT/host/tests/ride_format_test.py" "$EXE" --family "$G" >"$tmp/rides.log" 2>&1; then ok "ride file validation test"
+        else cat "$tmp/rides.log"; fail "ride file validation failed" "run: $PY -I $THPS_HOST_ROOT/host/tests/ride_format_test.py $EXE --family $G"; fi
         if $PY -I "$H/tests/controls_cfg_test.py" "$EXE" >"$tmp/controls.log" 2>&1; then ok "controls.cfg test"
         else cat "$tmp/controls.log"; fail "the controls.cfg test failed" "see its output above; rerun with: $PY -I $H/tests/controls_cfg_test.py $EXE"; fi
     else
@@ -260,6 +274,22 @@ dumps and their SHA-1s are in the game's README."
     rm -rf "$tmp"
 
     [ -n "$MAINT" ] || return 0
+
+    # The Windows cross-compile catches Windows-header macros (near/far/interface) before a release retest.
+    # Reuse the runtime already selected by the successful ROM-free build; mingw_check.py fetches its pinned
+    # llvm-mingw archive on first use into this game's build/mingw-check directory.
+    step "maintainer: Windows cross-compile (pinned llvm-mingw; first use downloads the compiler; reuses the stub-build runtime)"
+    MINGW_RUNTIME=$(sed -n 's/^RECOMP_RUNTIME_DIR:[^=]*=//p' "$H/build/cmake-check/CMakeCache.txt" | head -1)
+    if [ -z "$MINGW_RUNTIME" ] || [ ! -d "$MINGW_RUNTIME" ]; then
+        fail "the stub build's runtime path could not be read from $H/build/cmake-check/CMakeCache.txt" \
+             "rerun the stub build with a valid runtime, then rerun tools/check.sh --maintainer"
+    elif THPS_HOST="$H" THPS_HOST_ROOT="$THPS_HOST_ROOT" $PY -I "$THPS_HOST_ROOT/host/tools/mingw_check.py" \
+         --work "$H/build/mingw-check" --runtime "$MINGW_RUNTIME"; then
+        ok "Windows macro and host-source compile checks"
+    else
+        fail "the Windows cross-compile check failed" \
+             "see the mingw_check.py output above; the first run downloads pinned llvm-mingw into $H/build/mingw-check"
+    fi
 
     # 5. Maintainer: a real build from the dumps, the split engine, the full suite and the first-run test (tier 2).
     step "maintainer: real build from your dumps (build/cmake) and the split engine (build/cmake-split)"

@@ -11,6 +11,7 @@
 #include "ultramodern/renderer_context.hpp"
 #include "ultramodern/config.hpp"
 
+#include "ride.h"
 #include "versions.h"   // thps::game (the game profile), thps::sym(), ...
 
 union SDL_Event;

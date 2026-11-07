@@ -12,7 +12,8 @@ course_cycle_session(name, to_select, courses, start, end_run, ...):
 """
 
 # ~6 s of skating: forward, the stick swept left / right, an ollie every second (the virtual pad must be attached first).
-PLAY = [("ctl", "vpad axis lefty -32767"),
+PLAY = [("vpress", "a"),   # a newly attached virtual pad needs a button before axes reach port 1
+        ("ctl", "vpad axis lefty -32767"),
         *[x for k in range(6) for x in (("ctl", f"vpad axis leftx {(-32767, 0, 32767, 0)[k % 4]}"),
                                         ("ctl", "vpad button a 1"), ("wait", 8), ("ctl", "vpad button a 0"), ("wait", 22))],
         ("ctl", "vpad axis lefty 0"), ("ctl", "vpad axis leftx 0")]

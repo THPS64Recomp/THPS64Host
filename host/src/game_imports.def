@@ -93,6 +93,8 @@ THPS_IMPORT(CTX_RET, thps_memcpy)
 THPS_IMPORT(CTX_RET, thps_memset)
 THPS_IMPORT(CTX_RET, thps_view_set_frustum)
 THPS_IMPORT(CTX_RET, thps_widen_cull_planes)
+THPS_IMPORT(CTX, thps_ride_step_begin)
+THPS_IMPORT(CTX, thps_ride_step_end)
 // the game profile's own hooks (game/game_hooks.def: skip-intro and test-aid entry points that only some games have)
 #include "game_hooks.def"
 // runtime helpers declared in recomp.h

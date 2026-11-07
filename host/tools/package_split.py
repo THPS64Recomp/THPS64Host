@@ -172,6 +172,8 @@ def refresh_overlay_recipes(a):
     sys.path.insert(0, os.path.join(hostenv.COMMON, "firstrun"))
     import hashlib
     import gen_overlay_recipe as G
+    # The host may be a separate worktree selected by THPS_HOST_ROOT. The recipe's symbols and output belong to this game.
+    G.REPO = os.path.dirname(os.path.dirname(os.path.dirname(HOST)))
     keys = [f"{FAMILY}/{c}" for c in a.classes] if a.classes else [k for k in G.CLASSES if k.startswith(FAMILY + "/")]
     bad = [k for k in keys if k not in G.CLASSES]
     if bad:

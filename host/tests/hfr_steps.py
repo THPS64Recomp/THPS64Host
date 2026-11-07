@@ -45,7 +45,7 @@ def ids_clip() -> list[tuple]:
     import os  # noqa: PLC0415
     clip_dir = os.path.join(os.environ["THPS_HOST"], "build", "ids", "clip")
     return [*ids_switches(), ("wait", 30),
-            ("vpad", "attach"),
+            ("vpad", "attach"), ("vpress", "a"),
             ("ctl", f"pcap 1 {clip_dir}"),
             # THPS_CLIP_DUMP=N: also display-list dumps (trace + software composite) of the next N gfx tasks into <clip>-dl
             *([("ctl", f"dump {os.environ['THPS_CLIP_DUMP']} {clip_dir}-dl")] if os.environ.get("THPS_CLIP_DUMP") else []),
@@ -72,7 +72,7 @@ def ids_phases(n: int = 40, dump: bool = False) -> list[tuple]:
     dump_dir = os.path.join(os.environ["THPS_HOST"], "build", "ids") if dump else ""
     st = [("ctl", "idsscan 1"), *ids_switches(), ("wait", 20),
           ("ctl", f"idsstat {n}"),                                                   # standing at the start
-          ("vpad", "attach"), ("ctl", "vpad axis lefty -32000"), ("wait", 45),
+          ("vpad", "attach"), ("vpress", "a"), ("ctl", "vpad axis lefty -32000"), ("wait", 45),
           ("ctl", f"idsstat {n}"),                                                   # skating forward
           ("ctl", "vpad axis leftx 32767"), ("wait", 20),
           ("ctl", f"idsstat {n}"),                                                   # turning
@@ -241,6 +241,7 @@ def step(sess, st: tuple):
             p.unlink()
         t0 = inst.cmd("projids")
         inst.cmd("vpad attach")
+        sess.step(("vpress", "a"))   # claim port 1 before the stick-only route
         c0 = int(inst.cmd(f"pcap 1 {d}")["composited"])
         inst.cmd("vpad axis lefty -32000")   # the hole showed ~20 game frames after skating off the Hangar start (camera catching up)
         inst.wait_frames(int(seconds * 30))
@@ -280,6 +281,7 @@ def step(sess, st: tuple):
             return r.get("state", "?"), {k: int(r.get(k, 0)) for k in ("loads", "split", "rt64_flat", "rt64_off")}
         _, c0 = counters()
         inst.cmd("vpad attach")
+        sess.step(("vpress", "a"))   # claim port 1 before the stick-only route
         inst.cmd("vpad axis lefty -32000")
         inst.wait_frames(int(seconds * 30))
         inst.cmd("vpad axis lefty 0")

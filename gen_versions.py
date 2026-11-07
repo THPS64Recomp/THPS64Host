@@ -18,6 +18,7 @@ Writes (all generated, no ROM data: addresses, sizes, names, hashes)
   config CLASS OUTDIR           OUTDIR/<game>.host.toml, the N64Recomp config of one class
   namespace CLASS FUNCS_DIR OUT.h | rsp-config CLASS OUT.toml BLOB CPP   `#define name CLASS_name` for every function the class's
                                 generated C defines, so several payloads link into one binary
+  ride-audit CLASS FUNCS_DIR    check the generated ride writer scope (a class with ride_step; others pass)
   list                          one line per version (shell scripts)
 
 usage: python3 -I tools/gen_versions.py <command> [args]
@@ -67,6 +68,42 @@ def toml(path):
         return tomllib.load(f)
 
 
+def class_extensions(force):
+    """Validate optional own class hooks and the paired configured-ride profile."""
+    hooks = force.get("config", {}).get("hook", [])
+    for hook in hooks:
+        if set(hook) != {"func", "before_vram", "text"}:
+            raise ValueError("class hooks require func, before_vram and text")
+        if not isinstance(hook["func"], str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", hook["func"]):
+            raise ValueError("class hook func must be a C identifier")
+        address = hook["before_vram"]
+        if type(address) is not int or not 0x80000000 <= address <= 0x807FFFFC or address % 4:
+            raise ValueError("class hook before_vram must be an aligned RDRAM address")
+        if not isinstance(hook["text"], str) or not hook["text"]:
+            raise ValueError("class hook text must be nonempty")
+    calls = {name: [h for h in hooks if name in h["text"]]
+             for name in ("thps_ride_step_begin", "thps_ride_step_end")}
+    step = force.get("ride_step")
+    if step is None:
+        if any(calls.values()):
+            raise ValueError("ride writer hooks require the class ride_step profile")
+        return {}, hooks
+    if set(step) != {"override", "frame_time", "frame_ticks"}:
+        raise ValueError("ride_step requires override, frame_time and frame_ticks only")
+    for value in step.values():
+        if type(value) is not int or not 0x80000000 <= value <= 0x807FFFFC or value % 4:
+            raise ValueError("ride_step words must be aligned RDRAM addresses")
+    if len(set(step.values())) != 3:
+        raise ValueError("ride_step input and both outputs must be distinct words")
+    for name, matching in calls.items():
+        if len(matching) != 1 or matching[0]["text"] != f"{name}(rdram, ctx);":
+            raise ValueError("ride_step requires exactly one unmodified begin and end hook")
+    begin, end = calls["thps_ride_step_begin"][0], calls["thps_ride_step_end"][0]
+    if begin["func"] != end["func"] or begin["before_vram"] >= end["before_vram"]:
+        raise ValueError("ride_step hooks must be ordered in one function")
+    return step, hooks
+
+
 class Model:
     def __init__(self, prof):
         self.prof = prof
@@ -98,6 +135,10 @@ class Model:
             except FileNotFoundError as e:
                 errors.append(f"class {c}: missing {e.filename}")
                 continue
+            try:
+                class_extensions(force)
+            except (TypeError, ValueError) as e:
+                errors.append(f"class {c}: {e}")
             by_name = {}
             for a, n in force["force"].items():
                 if n in by_name:
@@ -239,10 +280,13 @@ def emit_header(m, out):
             L.append(f"    .{n} = " + (f"0x{bn[n]:08X}u," if n in funcs or n in addr else f"0x{bn[n]:X}u,"))
         L.append("};")
     L += ["", "struct CodeClass {", "    const char* name;", "    const SymTable* sym;",
-          "    const char* source;   // the games.toml row whose ROM the payload is generated from (versions/classes.toml `game`)", "};",
+          "    const char* source;   // the games.toml row whose ROM the payload is generated from (versions/classes.toml `game`)",
+          "    uint32_t ride_step_override, ride_step_frame_time, ride_step_frame_ticks; // optional audited paired-writer profile; zero is unsupported", "};",
           "inline constexpr CodeClass code_classes[] = {"]
     for c in sorted(m.per_class):
-        L.append(f"    {{ {cstr(c)}, &sym_{c}, {cstr(m.classes[c]['game'])} }},")
+        step, _ = class_extensions(m.per_class[c]["force"])
+        L.append(f"    {{ {cstr(c)}, &sym_{c}, {cstr(m.classes[c]['game'])}, " +
+                 f"0x{int(step.get('override', 0)):08X}u, 0x{int(step.get('frame_time', 0)):08X}u, 0x{int(step.get('frame_ticks', 0)):08X}u }},")
     L += ["};", "", "// One ROM version (games.toml row).", "struct VersionInfo {",
           "    const char* id;             // games.toml row",
           "    const char* game_id;        // recomp::GameEntry::game_id; the stored ROM is <game_id>.z64",
@@ -313,6 +357,11 @@ def emit_config(m, cls, outdir):
     for func, vrams in cop2.get("patch", {}).items():
         for v in vrams:
             L += ["", "[[patches.instruction]]", f"func = {cstr(func)}", f"vram = 0x{v:08X}", "value = 0x00000000"]
+    # Address-specific hooks belong to their audited class, never the shared family file.
+    _, hooks = class_extensions(pc["force"])
+    for hook in hooks:
+        L += ["", "[[patches.hook]]", f"func = {cstr(hook['func'])}",
+              f"before_vram = 0x{int(hook['before_vram']):08X}", f"text = {cstr(hook['text'])}"]
     L.append("")
     with open(os.path.join(prof.host, "config", f"{g}.hooks.toml")) as f:
         L.append(f.read())
@@ -367,6 +416,73 @@ def emit_namespace(cls, funcs_dir, out):
     print(f"gen_versions: namespace {cls}: {len(names)} functions -> {out}")
 
 
+RIDE_BEGIN, RIDE_END = "thps_ride_step_begin(rdram, ctx);", "thps_ride_step_end(rdram, ctx);"
+LABEL = re.compile(r"^[ \t]*([A-Za-z_]\w*):[ \t]*$", re.M)
+GOTO = re.compile(r"\bgoto\s+([A-Za-z_]\w*)\s*;")
+
+
+def ride_scope(text, func, begin, end):
+    """Problems with the ride writer scope in generated C (empty: sound). begin_hook holds the host's mutex until end_hook, so
+    every path from the begin call must reach the end call, and nothing may enter between them or call out."""
+    defs = list(DEF.finditer(text))
+    starts = [d for d in defs if d.group(1) == func]
+    if len(starts) != 1:
+        return [f"{func} is defined {len(starts)} times"]
+    after = [d.start() for d in defs if d.start() > starts[0].start()]
+    body = text[starts[0].end():after[0] if after else len(text)]
+    if text.count(RIDE_BEGIN) != 1 or text.count(RIDE_END) != 1 or body.count(RIDE_BEGIN) != 1 or body.count(RIDE_END) != 1:
+        return [f"expected one begin and one end call, both in {func}"]
+    b, e = body.index(RIDE_BEGIN), body.index(RIDE_END)
+    if b > e:
+        return ["the end call comes before the begin call"]
+    problems = []
+    def at(addr, start):   # the guest instruction annotation that must follow a call, with only blanks between
+        m = re.compile(rf"\s*// 0x{addr:08X}:").match(body, start)
+        return m is not None
+    if not at(begin, b + len(RIDE_BEGIN)):
+        problems.append(f"the begin call is not immediately before 0x{begin:08X}")
+    if not at(end, e + len(RIDE_END)):
+        problems.append(f"the end call is not immediately before 0x{end:08X}")
+    for addr, call in ((begin, b), (end, e)):   # a branch to the hooked address must not skip the call
+        label = re.search(rf"^[ \t]*L_{addr:08X}:[ \t]*$", body, re.M)
+        if label and not (label.end() <= call and not body[label.end():call].strip()):
+            problems.append(f"label L_{addr:08X} does not lead straight into its call")
+    scope = body[b + len(RIDE_BEGIN):e]
+    inside = set(LABEL.findall(scope))
+    for target in GOTO.findall(scope):
+        if target not in inside:
+            problems.append(f"goto {target} leaves the scope")
+    outside = body[:b] + body[e:]
+    for target in GOTO.findall(outside):
+        if target in inside:
+            problems.append(f"goto {target} enters the scope without the begin call")
+    if re.search(r"\breturn\b|\bswitch\b|LOOKUP_FUNC|\b\w+\(rdram, ctx\)", scope):
+        problems.append("a return, switch or call inside the scope")
+    addrs = sorted({int(a, 16) for a in re.findall(r"// 0x([0-9A-Fa-f]{8}):", scope)})
+    if addrs != list(range(begin, end, 4)):
+        problems.append(f"the scope is not exactly the instructions 0x{begin:08X}..0x{end - 4:08X}")
+    return problems
+
+
+def ride_audit(m, cls, funcs_dir):
+    step, hooks = class_extensions(m.per_class[cls]["force"])
+    if not step:
+        print(f"gen_versions: ride-audit {cls}: no ride_step profile")
+        return
+    begin = next(h for h in hooks if h["text"] == RIDE_BEGIN)
+    end = next(h for h in hooks if h["text"] == RIDE_END)
+    text = ""
+    for fn in sorted(os.listdir(funcs_dir)):
+        if re.fullmatch(r"funcs_\d+\.c", fn):
+            with open(os.path.join(funcs_dir, fn)) as f:
+                text += f.read() + "\n"
+    problems = ride_scope(text, begin["func"], begin["before_vram"], end["before_vram"])
+    if problems:
+        sys.exit(f"gen_versions: ride-audit {cls}: the generated ride writer scope in {begin['func']} is unsafe:\n  "
+                 + "\n  ".join(problems))
+    print(f"gen_versions: ride-audit {cls}: {begin['func']} 0x{begin['before_vram']:08X}..0x{end['before_vram']:08X} ok")
+
+
 def main(argv, prof):
     if not argv:
         sys.exit(__doc__)
@@ -385,6 +501,8 @@ def main(argv, prof):
         emit_config(m, argv[1], argv[2])
     elif cmd == "namespace":
         emit_namespace(argv[1], argv[2], argv[3])
+    elif cmd == "ride-audit":
+        ride_audit(m, argv[1], argv[2])
     elif cmd == "rsp-config":
         emit_rsp_config(m, argv[1], argv[2], argv[3], argv[4])
     elif cmd == "list":

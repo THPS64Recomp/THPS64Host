@@ -92,6 +92,12 @@ void thps_music_load_song(uint8_t* rdram, recomp_context* ctx);
 int thps_memset(uint8_t* rdram, recomp_context* ctx);
 int thps_memcpy(uint8_t* rdram, recomp_context* ctx);
 
+/* Optional audited class hooks: temporary configured ride frame-time override.
+ * Begin immediately before its load, end after either chosen frame-time store.
+ * Other classes have no hooks; legacy/default modes make these no-ops. */
+void thps_ride_step_begin(uint8_t* rdram, recomp_context* ctx);
+void thps_ride_step_end(uint8_t* rdram, recomp_context* ctx);
+
 /* Diagnostic at GameEntry: verifies the main image the boot loader inflated. */
 void thps_on_game_entry(uint8_t* rdram, recomp_context* ctx);
 

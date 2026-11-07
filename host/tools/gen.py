@@ -148,6 +148,7 @@ def main(argv):
             shutil.rmtree(old)
         print("warnings:", sum(1 for l in text.splitlines() if l.startswith("[Warn]")), " files:", len(os.listdir(rf)), " unchanged kept:", kept)
         run(PY + [os.path.join(HOST, "tools", "gen_versions.py"), "namespace", cls, rf, os.path.join(d, "namespace.h")])
+        run(PY + [os.path.join(HOST, "tools", "gen_versions.py"), "ride-audit", cls, rf])
     # Audio microcode (n_aspMain). The RSP program is the same for every version (docs/versions.md), so it is
     # generated once, from the first class's blob (so any one class's ROM is enough); the classes' copies must agree.
     rsp_dir = os.path.join(GEN, "rsp")

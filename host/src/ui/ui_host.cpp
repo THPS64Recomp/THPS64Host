@@ -944,7 +944,7 @@ std::string control(const std::string& args) {
         g_pending_tab = t;
         return "ok ui tab";
     }
-    if (cmd == "pad") {   // a controller button press (SDL_CONTROLLERBUTTON events: the path a real pad takes)
+    if (cmd == "pad") {   // trusted control command: the same UI handler/queue as a real pad, without SDL device-ID conversion
         std::string name;
         in >> name;
         static const std::pair<const char*, int> names[] = {
@@ -958,11 +958,11 @@ std::string control(const std::string& args) {
             d.type = SDL_CONTROLLERBUTTONDOWN;
             d.cbutton.button = Uint8(b);
             d.cbutton.state = SDL_PRESSED;
-            SDL_PushEvent(&d);
+            handle_event(d);
             SDL_Event u = d;
             u.type = SDL_CONTROLLERBUTTONUP;
             u.cbutton.state = SDL_RELEASED;
-            SDL_PushEvent(&u);
+            handle_event(u);
             return "ok ui pad " + name;
         }
         return "err ui pad back|start|up|down|left|right|a|b|x|y|lb|rb";

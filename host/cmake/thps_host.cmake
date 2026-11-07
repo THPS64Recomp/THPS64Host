@@ -68,6 +68,21 @@ if (NOT RECOMP_RUNTIME_DIR)
 endif()
 # ROM-free build: stub RecompiledFuncs (tools/gen_stub.py) in place of tools/gen.py's output. Links, cannot play.
 option(THPS_STUB_FUNCS "Link ROM-free stub RecompiledFuncs (tools/gen_stub.py) instead of tools/gen.py output: for CI and platform builds" OFF)
+if (THPS_STUB_FUNCS)
+    enable_testing()
+    add_executable(thps_ride_v3_format_test "${THPS_SHARED_DIR}/tests/ride_v3_format_test.cpp")
+    add_test(NAME ride_v3_format COMMAND thps_ride_v3_format_test)
+    add_executable(thps_ride_step_state_test "${THPS_SHARED_DIR}/tests/ride_step_state_test.cpp")
+    add_test(NAME ride_step_state COMMAND thps_ride_step_state_test)
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME ride_step_profile COMMAND "${Python3_EXECUTABLE}" -B -I "${THPS_SHARED_DIR}/tests/ride_step_profile_test.py")
+    add_test(NAME ride_harness COMMAND "${Python3_EXECUTABLE}" -B -I "${THPS_SHARED_DIR}/tests/ride_harness_test.py")
+    add_executable(thps_ride_step_runtime_test "${THPS_SHARED_DIR}/src/ride.cpp" "${THPS_SHARED_DIR}/tests/ride_step_runtime_test.cpp")
+    target_compile_definitions(thps_ride_step_runtime_test PRIVATE THPS_RIDE_STATE_TEST)
+    find_package(Threads REQUIRED)
+    target_link_libraries(thps_ride_step_runtime_test PRIVATE Threads::Threads)
+    add_test(NAME ride_step_runtime COMMAND thps_ride_step_runtime_test "${CMAKE_CURRENT_BINARY_DIR}/ride-step-test-inputs")
+endif()
 # Split build (the THPS1 repository's docs/internals/recomp.md): the app holds no game code. The recompiled functions and the audio
 # microcode are built on the user's machine from their ROM into a separate library (src/game_split.cpp, game-lib/), so this
 # configuration needs no ROM, no N64Recomp output and no generated C: only the version header (tools/gen_versions.py header).
@@ -217,6 +232,19 @@ if (THPS_OWN_SDL2 AND NOT WIN32)
         endif()
     endforeach()
     message(STATUS "THPS_OWN_SDL2: SDL2 from ${SDL2_DIR}")
+endif()
+
+if (THPS_STUB_FUNCS)
+    add_executable(thps_input_events_test "${THPS_SHARED_DIR}/tests/input_events_test.cpp")
+    target_compile_definitions(thps_input_events_test PRIVATE SDL_MAIN_HANDLED)
+    target_include_directories(thps_input_events_test PRIVATE "${THPS_SHARED_DIR}/src" ${SDL2_INCLUDE_DIRS})
+    target_link_libraries(thps_input_events_test PRIVATE ${SDL2_LIBRARIES})
+    add_test(NAME input_events COMMAND thps_input_events_test)
+    if (WIN32)
+        add_custom_command(TARGET thps_input_events_test POST_BUILD
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${THPS_SDL2_DLL}" "$<TARGET_FILE_DIR:thps_input_events_test>"
+            VERBATIM)
+    endif()
 endif()
 
 if (THPS_WITH_FRONTEND)
@@ -412,6 +440,7 @@ add_executable(${THPS_EXE}
     ${THPS_SHARED_DIR}/src/dl_fixes.cpp
     ${THPS_SHARED_DIR}/src/ultra_stubs.cpp
     ${THPS_SHARED_DIR}/src/input.cpp
+    ${THPS_SHARED_DIR}/src/ride.cpp
     ${THPS_SHARED_DIR}/src/platform.cpp
     ${THPS_SHARED_DIR}/src/audio.cpp
     ${THPS_SHARED_DIR}/src/music.cpp

@@ -51,14 +51,18 @@ A pull request from outside gets its tier 2 run by a maintainer before it's merg
 One command for each repository. It prints each step, a `Fix:` line for each failure, and ends with "Ready for a PR."
 
 - **`tools/check.sh`** (contributor mode, no ROM): the host pin, the version tables, a build with stand-in game
-  functions (in `build/cmake-check`, so your real build is left alone), and the ROM-free checks CI runs (`--features`,
-  `--check-rom` of an empty file exits 3, the controls.cfg test). In THPS64Host it checks each game cloned next to it
-  (`../THPS1-64Recomp`, ...) against your host, as the host CI does, with one shared runtime (`build/runtime`, or
+  functions (in `build/cmake-check`, so your real build is left alone), the six ROM-free CTest regressions
+  (`ride_v3_format`, `ride_step_state`, `ride_step_profile`, `ride_harness`, `ride_step_runtime`, and `input_events`),
+  and the ROM-free checks CI runs (`--features`, `--check-rom` of an empty file exits 3, the controls.cfg test). In
+  THPS64Host it checks each game cloned next to it (`../THPS1-64Recomp`, ...) against your host, as the host CI does, with one shared runtime (`build/runtime`, or
   `THPS_RUNTIME_DIR`). It warns about each game that isn't cloned there, with the clone command, and its last line names
   the games it checked and the ones it didn't: "Ready for a PR (checked: THPS1; not checked: THPS2, THPS3)." With no
   games next to it, it checks that our patches apply.
 - **`tools/check.sh --maintainer`**: also a real build from your dumps, the split engine, the full suite and the first-run
-  test (tier 2), then the push guard. It refuses to start when it can't find your dumps.
+  test (tier 2), then the push guard. Before the ROM-based tests it cross-compiles the host for Windows with the pinned
+  llvm-mingw toolchain, including a check that the Windows `near` macro rejects a same-named variable. The first run downloads
+  the pinned compiler archive into `build/mingw-check`; later runs reuse it. The Windows compile reuses the runtime selected by
+  the stub build. It refuses to start when it can't find your dumps.
   - Dumps: the nearest `roms/` folder at or above the checkout, or `THPS_ROMS=DIR`.
   - The guard: the one the checkout's pre-push hook calls, or `THPS_GUARD=PATH`.
 - **Windows:** run it in Git Bash.
@@ -69,6 +73,7 @@ One command for each repository. It prints each step, a `Fix:` line for each fai
 
 1. **Finish the changelog.** All PRs for the release are merged. Rename `## [Unreleased]` to `## [X.Y.Z] - <date, e.g. 2026-11-02>`
    and add an empty `## [Unreleased]` above it. The release notes come from this section, so write it for players.
+   Update `docs/VERIFICATION.md` section 3 with this release's results.
 2. **Start the manifest.** Pick the build commit on `main`, then:
    `release_manifest.py --manifest FILE init --scope thpsN --version X.Y.Z --build-sha SHA`.
 3. **Test it.** Tier 3 at that commit.

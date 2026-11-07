@@ -7,6 +7,24 @@ release, the release lists it under a **Games must** heading.
 
 ## [Unreleased]
 
+### Added
+- Recorded rides for tests: record port 1's input from a course start and play it back (`--ride-record`, `--ride-play` and the
+  control command `ride`). Harness steps play a complete ride before capturing its end frame. Ride files hold controller
+  inputs only.
+- Code generation checks the configured ride writer scope (`tools/gen_versions.py ride-audit`): one begin and one end call at
+  the profile's addresses, with no call, return or jump out of or into the code between them.
+- A ROM-free controller-event test in the contributor checks, including SDL push/poll and virtual-device lookup.
+
+### Changed
+- Experimental THPS2 US configured rides declare both their float and integer timing; older experimental float-only v3 files
+  are refused. Legacy v1/v2 ride files keep their timing. Game-library ABI 7: cached game libraries are rebuilt.
+- `tools/check.sh --maintainer` now runs the Windows MinGW compile check and passes the selected host root to both the normal
+  and split CMake configurations.
+
+### Games must
+- Experimental configured-timing profiles must supply distinct override, float-output and integer-output words, with the
+  paired end after both guest outputs. Profiles without them remain unsupported for configured rides.
+
 ### Fixed
 - Frame interpolation no longer stretches trees or opens holes in buildings in big scenes (THPS2 Philadelphia at draw distance
   Full). The interpolation ID tracker runs out of its 0.6 ms budget in such scenes, and the pieces it did not reach were left to
@@ -18,6 +36,19 @@ release, the release lists it under a **Games must** heading.
 - A frame that RT64 splits into several passes no longer clips triangles that run under the camera. RT64 sized each pass from the
   triangles' projected corners, and a corner behind the camera projects to the wrong side. New RT64 patch
   `rt64-viewport-behind-camera.patch`.
+- `--no-pads` also keeps physical controllers out of the settings menu. Virtual test controllers and control-channel menu
+  commands still work.
+- Recorded stick values keep full float precision and pad presence, so a replay gives the game the same input. Invalid ride
+  files fail clearly. Test routes claim their virtual controller before steering.
+- Ride end captures wait for the final saved input and use completed composited frames, so a comparison no longer sees a
+  different native framebuffer or extra pause-animation frames.
+- The graphics configuration is printed when it changes, not repeated during setup or unrelated settings updates.
+- `ride play` checks the new file before it stops the current recording or playback, so a mistyped path no longer ends a
+  recording early. Playing the recording in progress still writes it first.
+- An input read inside a ride writer scope whose end hook never ran fails the configured ride (`step-unclosed-writer`) instead
+  of waiting forever on the ride lock.
+- `tools/check.sh` no longer reports a false host-pin failure when `decomp/common` isn't checked out; it notes that CI checks it.
+- `package_split.py` refreshes the overlay recipes in the game's own checkout when the host is a separate worktree.
 
 ## [0.2.0] - 2026-10-27
 

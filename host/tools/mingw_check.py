@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -107,6 +108,27 @@ def fetch_toolchain(work, windows_ok=False):
     return next(os.path.join(dest, d) for d in os.listdir(dest) if d.startswith("llvm-mingw-"))
 
 
+def check_near_macro(cxx, env, work):
+    """Prove the Windows headers reject a variable named `near`, as the real source compile must."""
+    with tempfile.TemporaryDirectory(prefix="near-macro-probe-", dir=work) as probe:
+        valid = os.path.join(probe, "windows_header.cpp")
+        with open(valid, "w", encoding="utf-8") as f:
+            f.write("#include <windows.h>\nint main() { return 0; }\n")
+        result = subprocess.run([cxx, "-std=c++20", "-fsyntax-only", valid], capture_output=True, text=True, env=env)
+        if result.returncode:
+            sys.exit("Windows macro probe could not compile its windows.h control: " + result.stderr[-2000:])
+
+        negative = os.path.join(probe, "near_variable.cpp")
+        with open(negative, "w", encoding="utf-8") as f:
+            f.write("#include <windows.h>\n#ifndef near\n#error __THPS_NEAR_MACRO_NOT_DEFINED__\n#endif\nint near = 0;\n")
+        result = subprocess.run([cxx, "-std=c++20", "-fsyntax-only", negative], capture_output=True, text=True, env=env)
+        if result.returncode == 0:
+            sys.exit("Windows macro probe failed: a variable named `near` compiled successfully")
+        if "__THPS_NEAR_MACRO_NOT_DEFINED__" in result.stderr:
+            sys.exit("Windows macro probe failed: windows.h did not define the `near` macro")
+        print("Windows macro probe: a variable named `near` is rejected")
+
+
 def main(argv):
     if "--fetch-toolchain" in argv:
         argv = [a for a in argv if a != "--fetch-toolchain"]
@@ -142,9 +164,11 @@ def main(argv):
     exe = ".exe" if sys.platform == "win32" else ""   # CMake on Windows does not add it
     # forward slashes: CMake pastes the RC compiler path into generated CMake code unescaped ("Invalid character escape '\g'")
     cc, cxx, rc = (os.path.join(tc, "bin", f"x86_64-w64-mingw32-{t}{exe}").replace("\\", "/") for t in ("clang", "clang++", "windres"))
+    check_near_macro(cxx, env, work)
     subprocess.run(["cmake", "-S", HOST, "-B", build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_SYSTEM_NAME=Windows",
                     "-DCMAKE_SYSTEM_PROCESSOR=AMD64", f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}", f"-DCMAKE_RC_COMPILER={rc}",
                     f"-DCMAKE_FIND_ROOT_PATH={tc}/x86_64-w64-mingw32", f"-DRECOMP_RUNTIME_DIR={runtime}", "-DTHPS_STUB_FUNCS=ON",
+                    f"-DTHPS_HOST_ROOT={hostenv.COMMON}",
                     f"-DTHPS_GEN_DIR={os.path.join(work, 'gen-stub')}"]
                    + (["-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON",
                        # RmlUi's Math.cpp uses std::floor without <cmath>: MSVC's STL pulls it in through <algorithm>, llvm-mingw's libc++ does not
@@ -183,6 +207,7 @@ def main(argv):
     subprocess.run(["cmake", "-S", HOST, "-B", split_build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_SYSTEM_NAME=Windows",
                     "-DCMAKE_SYSTEM_PROCESSOR=AMD64", f"-DCMAKE_C_COMPILER={cc}", f"-DCMAKE_CXX_COMPILER={cxx}", f"-DCMAKE_RC_COMPILER={rc}",
                     f"-DCMAKE_FIND_ROOT_PATH={tc}/x86_64-w64-mingw32", f"-DRECOMP_RUNTIME_DIR={runtime}", "-DTHPS_SPLIT_GAME_LIB=ON",
+                    f"-DTHPS_HOST_ROOT={hostenv.COMMON}",
                     f"-DTHPS_GEN_DIR={os.path.join(work, 'gen-split')}"], check=True, env=env)
     db = json.loads(subprocess.run(["ninja", "-C", split_build, "-t", "compdb"], check=True, capture_output=True, text=True, env=env).stdout)
     split_only = {"game_split.cpp", "game_imports_table.cpp", "firstrun.cpp", "firstrun_ui.cpp", "platform_ext.cpp", "overlay_rom.cpp"}

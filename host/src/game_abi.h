@@ -26,7 +26,9 @@ extern "C" {
 //    thps_world_set_visibility_in_box and thps_world_find_item (zone-hidden items drawn at Full, event-hidden ones left alone).
 //    THPS1: thps_mem_alloc and thps_gfx_alloc_mtx (bigger matrix pools) and thps_gfx_frame_end (the frame end's reset list).
 //    THPS2/3: thps_mem_alloc and thps_gfx_setup_course (bigger matrix pools and display lists); THPS3 also thps_world_draw_deferred.
-#define THPS_GAME_ABI 5
+// 6: configured ride writer begin/end imports; old game libraries must be rebuilt.
+// 7: configured timing chooses float and integer outputs; CodeClass gains the integer-output word and the paired end moves.
+#define THPS_GAME_ABI 7
 
 struct ThpsHostApi {
     uint32_t abi;           // THPS_GAME_ABI

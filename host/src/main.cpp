@@ -22,7 +22,7 @@
 //                     [--fog original|soft|off]
 //                     [--draw-distance original|2x|4x|full] [--dd-buffers bigger|original]
 //                     [--skip-intro|--no-skip-intro] [--show-fps|--no-show-fps] [--volume N] [--check-rom PATH]
-//                     [--version ID] [--tv pal|ntsc|mpal]
+//                     [--version ID] [--tv pal|ntsc|mpal] [--ride-record FILE|--ride-play FILE] [--ride-step 1/30]
 //                     cheats (test aids, src/cheats.cpp; the ones the game has): [--unlock-levels] [--perfect-balance] [--slow-motion] [--skip-to-restart] [--always-special]
 //                     [--no-launcher|--launcher] (frontend build: start the game at once / show the
 //                     launcher even with --rom, --control or --seconds)
@@ -68,6 +68,7 @@
 
 #include "recomp.h"
 #include "host.h"
+#include "input_events.h"
 #include "hfr.h"
 #include "platform.h"
 #include "versions.h"
@@ -266,6 +267,7 @@ void update_gfx(void*) {
 #else
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
+        if (!thps::controller_action_allowed(ev, thps::options.no_pads)) continue;
         if (ev.type == SDL_QUIT) g_quit_requested = true;
 #ifndef __APPLE__
         // Alt+Enter: windowed <-> fullscreen (macOS has its own full-screen button / Ctrl+Cmd+F).
@@ -317,6 +319,7 @@ void update_gfx(void*) {
         if (!quitting) {
             quitting = true;
             print_status("quit", t);
+            thps::ride_quit();
             thps::audio_shutdown();
             // ultramodern::quit() lets recomp::start munmap RDRAM while game threads can still
             // wake up and touch it (SIGSEGV in wait_for_resumed, ~1 in 5 runs). Nothing needs
@@ -371,6 +374,7 @@ bool get_input(int controller, uint16_t* buttons, float* x, float* y) {
         thps::skip_intro_input(buttons);
         if (thps::options.control) thps::control_input(buttons, x, y);
         if (thps::options.control) thps::latency_on_poll(buttons);
+        thps::ride_on_read(&ok, buttons, x, y);   // a ride records what the game gets, or replaces it
         thps::stats.input_polls++;
         if (*buttons || *x != 0 || *y != 0) thps::stats.input_nonzero++;
     }
@@ -447,6 +451,13 @@ int main(int argc_in, char** argv_in) {
     bool build_game_only = false;
     std::filesystem::path blob_hash_rom, dump_blob_out;
 #endif
+    // Discover the opt-in before any immediate --ride-play / --check-rom action,
+    // preserving legacy parser exit behavior and making flag order independent.
+    for (int i = 1; i < argc; ++i) if (!std::strcmp(argv[i],"--ride-step")) {
+        if (++i >= argc || !thps::ride_set_step(argv[i])) {
+            std::fprintf(stderr,"[thps] ride: --ride-step supports only 1/30\n"); return 2;
+        }
+    }
     for (int i = 1; i < argc; i++) {
         auto arg = [&](const char* name) { return !std::strcmp(argv[i], name) && i + 1 < argc; };
         auto flag = [&](const char* name) { return !std::strcmp(argv[i], name); };
@@ -525,6 +536,10 @@ int main(int argc_in, char** argv_in) {
         else if (flag("--fullscreen")) gfx_overrides.emplace_back("fullscreen", "1");
         else if (flag("--windowed")) gfx_overrides.emplace_back("fullscreen", "0");
         else if (arg("--wav")) thps::options.wav_path = path_from_utf8(argv[++i]);
+        else if (arg("--ride-step")) ++i; // validated before immediate ride actions above
+        else if (arg("--ride-record")) { if (!thps::ride_record(argv[++i])) {
+            std::fprintf(stderr,"[thps] ride: %s\n",thps::ride_error().c_str()); return 2; } }
+        else if (arg("--ride-play")) { const char* f = argv[++i]; if (!thps::ride_play(f)) { std::fprintf(stderr, "[thps] ride: can't read %s (%s)\n", f, thps::ride_error().c_str()); return 2; } }
         else if (arg("--audio-fifo")) thps::options.audio_fifo_frames = std::atoi(argv[++i]);
         else if (flag("--control")) thps::options.control = true;
         else if (flag("--skip-intro")) thps::skip_intro_override = 1;
@@ -555,6 +570,7 @@ int main(int argc_in, char** argv_in) {
 #else
             std::puts("menu=0");
 #endif
+            std::printf("ride_step=%s\n",!std::strcmp(thps::game::family,"thps2") ? "thps2-us-static-split-experimental" : "unsupported");
             return 0;
         }
         else if (thps::hfr_arg(argc, argv, i)) {}  // --hfr-* (src/interpolation.cpp)
@@ -592,6 +608,7 @@ int main(int argc_in, char** argv_in) {
 #ifdef THPS_SPLIT_GAME_LIB
     if (const char* lib = std::getenv("THPS_GAME_LIB"); lib && *lib && game_opt.library.empty()) game_opt.library = path_from_utf8(lib);
     if (const char* live = std::getenv("THPS_LIVE"); live && *live == '1') game_opt.live = true;
+    thps::ride_engine_live(game_opt.live);
     thps::game::init(thps::platform::resource_dir(argv[0]), !game_opt.library.empty());
 #endif
 
@@ -754,6 +771,10 @@ int main(int argc_in, char** argv_in) {
         return 1;
     }
 #endif
+    if (thps::ride_needs_step() && (!g_direct_start || !g_chosen || !thps::ride_validate_version(*g_chosen))) {
+        std::fprintf(stderr,"[thps] ride: configured timing needs direct THPS2 US native/split startup (%s)\n",thps::ride_error().c_str());
+        return 2;
+    }
 #ifdef THPS_SPLIT_GAME_LIB
     if (g_chosen) {
         // The stored ROM is <game_id>.z64 in the config folder (select_rom stored it, big-endian).
