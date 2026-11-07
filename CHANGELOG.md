@@ -7,6 +7,18 @@ release, the release lists it under a **Games must** heading.
 
 ## [Unreleased]
 
+### Fixed
+- Frame interpolation no longer stretches trees or opens holes in buildings in big scenes (THPS2 Philadelphia at draw distance
+  Full). The interpolation ID tracker runs out of its 0.6 ms budget in such scenes, and the pieces it did not reach were left to
+  RT64's own pairing, which mixed up objects drawn with one matrix per vertex. Pieces from per-frame lists that the tracker does
+  not reach are now shown unpaired for that frame instead.
+- Parts of the ground no longer flash as flat patches of the clear colour (THPS2 School II at draw distance Full). RT64 measured a
+  palette load as 8 bytes per entry instead of 2, so a palette just below one of the game's framebuffers counted as reading that
+  framebuffer, and every frame drawn into it was split into many synchronised passes. New RT64 patch `rt64-tlut-range.patch`.
+- A frame that RT64 splits into several passes no longer clips triangles that run under the camera. RT64 sized each pass from the
+  triangles' projected corners, and a corner behind the camera projects to the wrong side. New RT64 patch
+  `rt64-viewport-behind-camera.patch`.
+
 ## [0.2.0] - 2026-10-27
 
 Split screen, Picture Border, rebinding, draw distance and the Original and Enhanced presets, used by the v0.2 releases of

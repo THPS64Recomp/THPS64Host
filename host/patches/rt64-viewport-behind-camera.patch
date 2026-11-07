@@ -1,0 +1,31 @@
+RT64 4337374: a triangle with a vertex at or behind the camera got a too-small drawn area (found on THPS2 School II, experiment 59).
+
+RSP::drawIndexedTri estimates each triangle's screen area from its three projected vertices (posScreen = xyz / w). A vertex with
+w <= 0 projects to the mirrored side, so the estimate can miss most of the triangle. The estimate feeds the framebuffer pair's
+drawColorRect, and the workload renderer makes the pair's viewport as tall as that rect (getTargetsFromPair: nativeColorHeight =
+drawColorRect.bottom; FramebufferRenderer::addFramebuffer: viewport height = targetHeight). A pair holding the frame's full-screen
+clear never notices. A pair split off mid-frame (rt64-tlut-range's case, or a real read of the image being drawn) clipped a ground
+triangle running under the camera at the short edge: flat patches of the clear colour. Fix: take the whole scissor for such a
+triangle. Three compares per triangle on the CPU; the area only grows.
+
+--- a/src/hle/rt64_rsp.cpp
++++ b/src/hle/rt64_rsp.cpp
+@@ -1142,7 +1142,17 @@
+             fbPair.scissorRect.merge(scissorRect);
+ 
+             FixedRect drawRect;
+-            for (int i = 0; i < 3; i++) {
++            // [thps-recomp] A vertex at or behind the camera (w <= 0) projects to the mirrored side of the screen, so the three screen
++            // positions don't bound the triangle. Take the whole scissor (clipped to the viewport below): the pair's viewport is as tall
++            // as its drawn area, and a too-short area clipped ground running under the camera (THPS2 School II, frames split in several pairs).
++            const auto &posTransformed = workload.drawData.posTransformed;
++            const bool behindCamera = (posTransformed[globalIndices[0]].w <= 0.0f) || (posTransformed[globalIndices[1]].w <= 0.0f) ||
++                (posTransformed[globalIndices[2]].w <= 0.0f);
++            if (behindCamera) {
++                drawRect = scissorRect;
++            }
++
++            for (int i = 0; (i < 3) && !behindCamera; i++) {
+                 const hlslpp::float3 &v = posScreen[globalIndices[i]];
+                 drawRect.ulx = std::min(drawRect.ulx, int32_t(v[0] * 4.0f));
+                 drawRect.uly = std::min(drawRect.uly, int32_t(v[1] * 4.0f));

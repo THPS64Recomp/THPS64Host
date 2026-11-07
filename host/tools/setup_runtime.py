@@ -25,7 +25,8 @@ Microsoft's DXC v1.8.2407 release, downloaded into DEST/dxc/v1.8.2407/x64 with t
 Nothing is committed to git. RT64's own contrib/dxc still provides the build-time dxc (headers, dxc.exe: its output is the embedded shader blobs).
 
 Pins (as in CBFD-Recompiled V0.1.5): N64ModernRuntime cdf5abb, rt64 4337374, RecompFrontend b1a1477.
-Patches, in this order: rt64-hlslpp-labs, rt64-present-capture-widescreen, rt64-hfr, rt64-metal-clear-state;
+Patches, in this order: rt64-hlslpp-labs, rt64-present-capture-widescreen, rt64-hfr, rt64-metal-clear-state,
+rt64-splitscreen-widescreen, rt64-tlut-range, rt64-viewport-behind-camera;
 then to N64ModernRuntime: ultramodern-sp-complete-after-dl. (ultramodern-vi-rate
 is not applied: it is for real PAL timing, see README.)
 
@@ -73,7 +74,8 @@ UI_FONTS = {   # path in Zelda64Recomp's assets/ -> SHA-256 (all SIL OFL 1.1; th
     "promptfont/promptfont.ttf": "7206e62fdb7e07fdf137e52464d7fa862f2f8dc79931fa6500e6ceb8ed1f06b9",
 }
 RT64_PATCHES = ["rt64-hlslpp-labs.patch", "rt64-present-capture-widescreen.patch", "rt64-hfr.patch", "rt64-metal-clear-state.patch",
-                "rt64-splitscreen-widescreen.patch"]
+                "rt64-splitscreen-widescreen.patch", "rt64-tlut-range.patch",
+                "rt64-viewport-behind-camera.patch"]
 # N64ModernRuntime: "RSP done" goes to the game after RT64 has parsed the display list (see the patch's header).
 NMR_PATCHES = ["ultramodern-sp-complete-after-dl.patch"]
 # Submodules a --patches-only checkout needs (the patched files only).

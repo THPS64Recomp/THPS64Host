@@ -33,6 +33,13 @@ struct Rdram {
     uint16_t h(uint32_t p) const { return *reinterpret_cast<const uint16_t*>(m + ((p & 0x3FFFFFE) ^ 2)); }
 };
 
+// Trace aid: FNV-1a over the RDRAM words [a, a + n) (word-aligned), so a trace shows whether a load reads the same data as in another frame.
+uint32_t data_hash(const Rdram& r, uint32_t a, uint32_t n) {
+    uint32_t h = 2166136261u;
+    for (uint32_t p = a & ~3u; p < a + n && p < 0x800000; p += 4) h = (h ^ r.w(p)) * 16777619u;
+    return h;
+}
+
 struct TileDesc {
     uint32_t fmt = 0, siz = 0, line = 0, tmem = 0, palette = 0;
     uint32_t uls = 0, ult = 0, lrs = 0, lrt = 0;  // 10.2
@@ -304,6 +311,7 @@ void thps::inspect_display_list(uint8_t* rdram, uint32_t task, uint32_t ucode, u
             case 0x01: {
                 uint32_t n = (w0 >> 12) & 0xFF;
                 vtx += n;
+                if (trace) std::printf("[trace]   data %06X+%u %08X\n", resolve(w1), n * 16, data_hash(r, resolve(w1), n * 16));
                 if (canvas.empty()) break;
                 int v0 = int((w0 >> 1) & 0x7F) - int(n);
                 uint32_t a = resolve(w1);
@@ -462,11 +470,23 @@ void thps::inspect_display_list(uint8_t* rdram, uint32_t task, uint32_t ucode, u
                     t.lrs = (w1 >> 12) & 0xFFF; t.lrt = w1 & 0xFFF;
                 }
                 tmem[t.tmem] = s;
+                if (trace) {
+                    const uint32_t bpp4 = timg_siz == 0 ? 1 : timg_siz == 1 ? 2 : timg_siz == 2 ? 4 : 8;   // bits per texel / 4
+                    uint32_t a = timg_addr, n = 0;
+                    if (s.block) n = (s.texels * bpp4 + 1) / 2;
+                    else {
+                        const uint32_t row = (timg_w * bpp4 + 1) / 2;
+                        a = timg_addr + (s.ult >> 2) * row + ((s.uls >> 2) * bpp4) / 2;
+                        n = ((t.lrt >> 2) - (s.ult >> 2) + 1) * row;
+                    }
+                    std::printf("[trace]   data %06X+%u %08X\n", a, n, data_hash(r, a, n));
+                }
                 break;
             }
             case 0xF0:  // LOADTLUT
                 loads++;
                 pal_addr = timg_addr;
+                if (trace) std::printf("[trace]   data %06X+%u %08X\n", timg_addr, (((w1 >> 14) & 0x3FF) + 1) * 2, data_hash(r, timg_addr, (((w1 >> 14) & 0x3FF) + 1) * 2));
                 break;
             case 0xF7: fill_color = w1; break;
             case 0xF6: {

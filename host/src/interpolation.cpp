@@ -349,6 +349,7 @@ std::string hfr_perf_text() {
 //   hfr                    the cumulative pairing counters
 //   projids [on|off]       the projection-kind IDs (switch for A/B) and how many camera / shadow loads were tagged
 //   vpsplit [on|off]       the host's view-projection split (switch for A/B) and its counters
+//   rt64fb [ram=0|1] [gpu=0|1]  test aid: RT64's Render to RAM and GPU framebuffer copies, live (A/B for framebuffer effects)
 bool hfr_control(const std::string& cmd, std::istringstream& in) {
     if (cmd == "hud") {
         reply("ok hud " + hud_report());
@@ -375,6 +376,17 @@ bool hfr_control(const std::string& cmd, std::istringstream& in) {
         if (v == "on" || v == "off") g_vp_split = v == "on";
         reply("ok vpsplit state=" + std::string(g_vp_split.load() ? "on" : "off") + " loads=" + std::to_string(g_vp_loads.load()) +
               " split=" + std::to_string(g_vp_fixed.load()) + " rt64_flat=" + std::to_string(g_vp_rt64_flat.load()) + " rt64_off=" + std::to_string(g_vp_rt64_off.load()));
+        return true;
+    }
+    if (cmd == "rt64fb") {   // rt64fb [ram=0|1] [gpu=0|1] (test aid): RT64's Render to RAM and GPU framebuffer copies (EmulatorConfiguration::framebuffer)
+        RT64::Application* app = g_app.load();
+        if (!app) { reply("err rt64fb no renderer yet"); return true; }
+        std::string kv;
+        while (in >> kv) {
+            if (kv.rfind("ram=", 0) == 0) app->emulatorConfig.framebuffer.renderToRAM = kv[4] == '1';
+            if (kv.rfind("gpu=", 0) == 0) app->emulatorConfig.framebuffer.copyWithGPU = kv[4] == '1';
+        }
+        reply("ok rt64fb ram=" + std::to_string(int(app->emulatorConfig.framebuffer.renderToRAM)) + " gpu=" + std::to_string(int(app->emulatorConfig.framebuffer.copyWithGPU)));
         return true;
     }
     if (cmd == "dltrace") {

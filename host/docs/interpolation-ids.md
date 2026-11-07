@@ -114,7 +114,9 @@ rebuilt every frame (tier 2 finds them by themselves, by "this list was not ther
 * RT64's own check stays on (position AUTO: a jump of 5+ units that is 10 times the previous step is not interpolated).
 * A camera cut (jump or turn beyond the detector's thresholds) tags every transform of that frame IGNORE and clears the tracks.
 * A scan that disagrees with RT64's walk, or a task with no projection, tags nothing.
-* Bounded work: the tracker uses a hashed exact pass and a spatial grid for the nearest search of big groups, and after 0.6 ms of its thread's CPU time (`ids budget`) the rest of a task is left to RT64's own search (`bailed` counter), so a huge scene cannot make a frame late.
+* Bounded work: the tracker uses a hashed exact pass and a spatial grid for the nearest search of big groups, and after 0.6 ms of its thread's CPU time (`ids budget`) the rest of a task
+  is not matched (`bailed` counter), so a huge scene cannot make a frame late. What is left of tier 1 goes to RT64's own search; tier-2 pieces get an ID with no partner (shown as
+  they are for that frame), because RT64's search pairs them across objects (section 11). Until 2026-11-03 everything past the budget went to RT64.
   Where there is no thread CPU clock (Windows: `GetThreadTimes` ticks at about 15.6 ms, `QueryThreadCycleTime` counts cycles), the budget runs on wall time
   (steady clock) and is 3 times larger (1.8 ms by default): wall time also counts preemption (walks of 0.4 ms CPU were measured at up to 16 ms wall on a loaded
   machine, section 10.1), and the largest real walk is 1.2 ms wall, so the larger budget keeps ordinary scenes whole; a preempted walk that is cut only leaves its
@@ -140,8 +142,9 @@ Control commands (`--control`, one per line, reply `[ctl] ok ...`):
 |---|---|
 | `ids [on\|off\|tier2 on\|off\|step N\|reset]` | switch the mechanism or its second tier, change the gate, clear the tracks; the reply is the counters: tasks, hooks, tagged, matched, matched2 (tier 2), fresh_far, ambiguous, untracked, mismatches (scan vs RT64 walk), cuts |
 | `ids slow` / `ids slowreset` | the histogram (wall and thread-CPU time, buckets <0.25 / 0.5 / 1 / 2 / 4 / 8 / 16 ms / more) and the ten slowest walks since the reset, each with its CPU time, scan share, transform / command / matrix counts, tracks, tier-2 candidates and whether a camera cut was seen; `ids budget US` sets the tracker's CPU budget (x3 on the wall clock); `ids naive on\|off` and `ids selftest N` are test aids (section 10.1) |
-| `idsscan 0\|1` | walk every task (the two below turn it on) |
-| `idsstat N [FILE]` | pairing statistics over N sampled matched frames: all / moving transforms paired, worst unpaired per frame, camera paired |
+| `ids log FILE` / `ids log off` | every non-exact match of the tracker, one line each: task, ID, tier, rule (one-to-one, in order, nearest), parent list, distance, rotation and scale change, the track's last steps (section 11) |
+| `ids ignore on\|off`, `ids ambig fresh\|auto` | test aids: every world transform `G_EX_ID_IGNORE` (only the camera interpolates); near-ties get an ID with no partner instead of RT64's search |
+| `idsstat N [FILE]`, `idsscan 0\|1` | pairing statistics over N sampled matched frames: all / moving transforms paired, worst unpaired per frame, camera paired; `idsscan 1` walks every task (`idsstat`, `idsdump` and `idscalls` turn it on) |
 | `idsdump FILE [1]` | RT64's verdict per transform joined with the walk (matrix, translation, vertices, triangles, state hash, parent list, matrix hash) of the same task; `1` also dumps the task before |
 | `idscalls FILE [1]` | the same plus RT64's call and candidate tables (scenes, calls with hash and triangle counts, transform candidates, per-projection `mapped`). Needs an RT64 built with `HFR_STATS_HAS_CALLS` (diagnostic patch kept in the clone used for this work, not part of the repo's patches) |
 | `ftime start` / `ftime stop [FILE]` | (FILE: every timestamp as CSV `kind,seconds`, plus `span,NAME,START,MS` rows: erz, dma, memset/memcpy of 4 KiB and up, send_dl, update_screen, audio, RT64 workload; sessions in `tests/load_freeze.py`) frame-time statistics between the two (presented / composited / game frames: fps, p50 / p95 / p99 / max interval, frames over 20 ms / 40 ms) and the cost of the ID walk + tracker and hook over the window |
@@ -261,3 +264,24 @@ Interleaved off / on (bounded) / on (first version), three blocks of 20 s each p
 The frames over 20 ms and the worst frames do not follow the mode: they appear in the IDs-off blocks as well (THPS1 off: 34, 190 ms), come in bursts when the machine is busy (the THPS2 "on" count is
 one block at load 5.4; the same game's later blocks at load 3.4-4.4 had 0 in every mode), and one-off stalls of 80-250 ms occur in all modes. In the quiet blocks (load <= 4.5) every mode had 0-1 frames over 20 ms and
 p99 16.9 ms. So there is no measurable effect of the IDs on presents; the CPU cost is 0.1 ms per game frame on average and under 0.4 ms at worst.
+
+## 11. THPS2 Philadelphia: smears and holes past the budget (2026-11-03)
+
+Seen in a v0.3 playtest: in THPS2 Philadelphia at draw distance Full, trees stretched across the picture and sky showed through buildings for one in-between present,
+mostly while turning. Measured on a recorded route (input replay) of that course:
+
+* Philadelphia at Full is the largest scene measured: 900 to 1700 transforms per frame (Hangar, where the IDs were developed: 165 to 490). The walk then costs up to
+  2.4 ms of CPU (99 % of walks under 2 ms), so the 0.6 ms budget runs out in most frames (`bailed` 230k to 250k over a 55 s route, about 95 a frame).
+* Past the budget tier 2 did not run at all, so its pieces went to RT64's search. In Philadelphia they include far objects drawn from the task's own list with one matrix
+  per vertex (a matrix, one vertex, the next matrix...; the triangles come after), hundreds alike in draw shape and a few hundredths of a unit apart. RT64's search paired
+  vertices of one object with another's, and the in-between frame drew them half way: the stretched foliage and the holes.
+* Fix: tier-2 pieces past the budget get an ID with no partner (shown as they are for that frame) instead of RT64's search. They are mostly far scenery that hardly
+  moves, so showing it unpaired costs nothing visible.
+* Evidence: present captures of the same 23 s with each setting, scored by a frame-neighbour check (in-between presents with a patch that neither neighbour explains
+  while the neighbours agree, clusters of 4 / 10 / 20 blocks): old build 237 / 37 / 11 and 244 / 24 / 4 (two runs; which presents fail changes between runs, since the
+  budget is CPU time); every world transform IGNORE 234 / 21 / 2; budget 5 ms 233 / 20 / 2; budget 2 ms with the fallback 234 / 20 / 2 and 232 / 20 / 2; this fix
+  (0.6 ms with the fallback) 236 / 20 / 2. The remaining base is fast motion beyond the check's shift. The smear and both holes found by eye are gone at the same
+  moments. Switches that changed nothing: IDs off, projection-kind IDs off, the view-projection split off, texture-tile interpolation off, near-ties without a partner.
+* A larger budget (2 ms) was tried and dropped: the walk runs on the gfx thread, and on a loaded machine (load 20) its walks of 1-2 ms CPU took 4-16 ms of wall time,
+  enough to make THPS1 School frames late and change the game's time-scaled physics (its ride trace, stable over 17 earlier runs, moved; back with 0.6 ms).
+* Not done: a cheaper tier 2 for these clusters (the nearest search there looks at every pair of a few hundred alike pieces), so they could be interpolated too.

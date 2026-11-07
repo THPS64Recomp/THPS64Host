@@ -71,6 +71,7 @@ struct MtxRec {
     uint32_t proj = 0;       // projection matrix that was current
     uint32_t mh = 0;         // hash of the matrix words (equal in two frames = the object did not move)
     float t[3] = {0, 0, 0};  // translation (row 3)
+    float r[3][3] = {};      // rotation and scale (rows 0-2)
     uint32_t vtx = 0;        // vertices loaded while this matrix was current
     uint32_t tris = 0;       // triangles drawn
     uint32_t bursts = 0;     // runs of triangle commands separated by other commands
@@ -160,6 +161,7 @@ void scan_task(const uint8_t* rdram, uint32_t dl_address, TaskScan& out) {
     uint8_t cur_params = 0;
     uint32_t cur_mh = 0;
     float cur_t[3] = {0, 0, 0};
+    float cur_r[3][3] = {};
     bool in_burst = false;
     uint32_t cc0 = 0, cc1 = 0, om_h = 0, om_l = 0, geom = 0;
     uint32_t mtx_count = 0;
@@ -197,6 +199,7 @@ void scan_task(const uint8_t* rdram, uint32_t dl_address, TaskScan& out) {
                 float m[4][4];
                 thps::read_fixed_matrix(rdram, cur_mtx, m);
                 cur_t[0] = m[3][0], cur_t[1] = m[3][1], cur_t[2] = m[3][2];
+                for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) cur_r[i][j] = m[i][j];
                 cur_mh = 2166136261u;
                 for (int k = 0; k < 16; k++) cur_mh = hash32(cur_mh, word(cur_mtx + 4 * k));
                 break;
@@ -212,6 +215,7 @@ void scan_task(const uint8_t* rdram, uint32_t dl_address, TaskScan& out) {
                     r.proj = cur_proj;
                     r.mh = cur_mh;
                     r.t[0] = cur_t[0], r.t[1] = cur_t[1], r.t[2] = cur_t[2];
+                    std::memcpy(r.r, cur_r, sizeof r.r);
                     r.created = true;
                     r.xf = uint32_t(out.xf.size());
                     if (cur_seq != 0xFFFFFFFFu && out.mtx_xf[cur_seq] < 0) out.mtx_xf[cur_seq] = int32_t(out.xf.size());
@@ -336,7 +340,32 @@ bool sample_frame(Sample& smp) {
 struct Track {
     uint32_t id = 0, parent = 0, mh = 0, sig = 0;
     float t[3] = {0, 0, 0}, v[3] = {0, 0, 0};
+    float r[3][3] = {};   // rotation and scale (matrix rows 0-2)
+    float w = 0;          // last rotation step (degrees; kept while `ids log` runs)
 };
+
+// Rotation between two matrices' 3x3 parts, in degrees (rows normalised, so a scale change does not count), and the largest relative change of a
+// row's length (scale).
+float rot_step_deg(const float a[3][3], const float b[3][3]) {
+    float tr = 0;
+    for (int i = 0; i < 3; i++) {
+        float la = 0, lb = 0, d = 0;
+        for (int j = 0; j < 3; j++) la += a[i][j] * a[i][j], lb += b[i][j] * b[i][j], d += a[i][j] * b[i][j];
+        if (la < 1e-12f || lb < 1e-12f) return 0;
+        tr += d / std::sqrt(la * lb);
+    }
+    return std::acos(std::clamp((tr - 1.0f) * 0.5f, -1.0f, 1.0f)) * 57.29578f;
+}
+float scale_step(const float a[3][3], const float b[3][3]) {
+    float worst = 0;
+    for (int i = 0; i < 3; i++) {
+        float la = 0, lb = 0;
+        for (int j = 0; j < 3; j++) la += a[i][j] * a[i][j], lb += b[i][j] * b[i][j];
+        la = std::sqrt(la), lb = std::sqrt(lb);
+        if (la > 1e-6f || lb > 1e-6f) worst = std::max(worst, std::fabs(la - lb) / std::max(la, lb));
+    }
+    return worst;
+}
 
 std::atomic<bool> g_ids_on{true};            // --interp-ids off / control "ids off" for A/B
 std::atomic<float> g_max_step{thps::game::interp_ids_max_step};   // world units a piece may move between two game frames and still be the same object (game.toml)
@@ -348,9 +377,16 @@ std::vector<uint32_t> g_mtx_cmds;            // ...and where each one is (the ho
 size_t g_mtx_cursor = 0;
 bool g_mtx_abort = false, g_last_tagged = false;
 bool g_task_cut = false;
-std::atomic<uint64_t> g_budget_ns{600000};     // thread-CPU budget of the tracker per task; the rest of a task past it is left to RT64
+std::atomic<uint64_t> g_budget_ns{600000};     // thread-CPU budget of the tracker per task; match_task says what happens past it (THPS2 Philadelphia at Full runs past it in most frames: harmless, see there)
 std::atomic<bool> g_naive{false};            // selftest only: the first version's search (linear exact pass, all pairs), to show its worst case
 std::atomic<bool> g_tier2{true};             // control "ids tier2 on|off": second tier (draw shape) for pieces from lists that do not repeat
+std::atomic<bool> g_ambig_fresh{false};      // control "ids ambig fresh|auto" (test aid): a near-tie gets an ID with no partner instead of RT64's own search
+std::atomic<bool> g_all_ignore{false};       // control "ids ignore on|off" (test aid): every world transform G_EX_ID_IGNORE (shown as it is; only the camera interpolates)
+bool g_ignore_set = false;
+// control "ids log FILE" / "ids log off" (evidence tool): every non-exact match with its rule, distance, rotation and scale change and the track's last steps
+std::atomic<bool> g_log_on{false};
+std::mutex g_log_mutex;
+std::string g_log, g_log_file;
 
 std::atomic<uint64_t> g_walk_ns{0}, g_walk_max_ns{0}, g_hook_ns{0}, g_timed_tasks{0};
 std::atomic<uint64_t> g_cpu_ns{0}, g_cpu_max_ns{0};
@@ -397,7 +433,8 @@ float speed(const Track& k) { return std::sqrt(k.v[0] * k.v[0] + k.v[1] * k.v[1]
 
 // The matching proper: `tracks` (the previous 3D task's) become this task's, `mtx_ids` (per model-view G_MTX) get the IDs. Bounded work: the cost is
 // about linear in the number of transforms (hashed exact pass, a spatial grid for the nearest search of big groups), and after `budget_ns` of this thread's
-// CPU time (wall time x kWallBudgetScale where there is no thread CPU clock) the rest of the task is left to RT64's own search (counted as `bailed`).
+// CPU time (wall time x kWallBudgetScale where there is no thread CPU clock) the rest of the task is not matched (counted as `bailed`): tier-1 pieces are
+// left to RT64's own search, tier-2 pieces get an ID with no partner.
 void match_task(const TaskScan& t, std::vector<Track>& tracks, std::vector<uint32_t>& mtx_ids, bool count, uint64_t budget_ns) {
     const uint64_t c_start = budget_clock_ns();
     if (!kThreadCpuClock) budget_ns *= kWallBudgetScale;
@@ -411,6 +448,7 @@ void match_task(const TaskScan& t, std::vector<Track>& tracks, std::vector<uint3
     const size_t n = t.xf.size();
     std::vector<int> match(n, -1);
     std::vector<char> used(tracks.size(), 0), ambiguous(n, 0), has_key(n, 0), tier2_cand(n, 0), unresolved(n, 0);
+    std::vector<uint8_t> how(n, 0);   // which rule matched: 1 identical matrix, 2 one-to-one, 3 same count in order, 4 nearest
     auto dist_to = [&](size_t j, int p) {
         const MtxRec& r = t.mtx[t.xf[j]];
         const Track& k = tracks[p];
@@ -429,6 +467,7 @@ void match_task(const TaskScan& t, std::vector<Track>& tracks, std::vector<uint3
                 for (int p : ps_all) {
                     if (used[p] || tracks[p].mh != mh) continue;
                     match[j] = p;
+                    how[j] = 1;
                     used[p] = 1;
                     found = true;
                     break;
@@ -446,7 +485,7 @@ void match_task(const TaskScan& t, std::vector<Track>& tracks, std::vector<uint3
                 bool found = false;
                 if (it != by_mh.end()) {
                     size_t& c = next_of[mh];
-                    if (c < it->second.size()) { const int p = it->second[c++]; match[j] = p; used[p] = 1; found = true; }
+                    if (c < it->second.size()) { const int p = it->second[c++]; match[j] = p; how[j] = 1; used[p] = 1; found = true; }
                 }
                 if (!found) js.push_back(j);
             }
@@ -459,14 +498,14 @@ void match_task(const TaskScan& t, std::vector<Track>& tracks, std::vector<uint3
         // be; otherwise nearest to the predicted position, only when clearly nearer than the runner-up.
         auto gate = [&](int p) { return std::min(cap, std::max(12.0f, 4.0f * speed(tracks[p]))); };
         if (js.size() == 1 && ps.size() == 1) {
-            if (dist_to(js[0], ps[0]) <= one_max) { match[js[0]] = ps[0]; used[ps[0]] = 1; }
+            if (dist_to(js[0], ps[0]) <= one_max) { match[js[0]] = ps[0]; how[js[0]] = 2; used[ps[0]] = 1; }
             return;
         }
         if (js.size() == ps.size()) {
             bool ok = true;
             for (size_t k = 0; k < js.size() && ok; k++) ok = dist_to(js[k], ps[k]) <= gate(ps[k]);
             if (ok) {
-                for (size_t k = 0; k < js.size(); k++) { match[js[k]] = ps[k]; used[ps[k]] = 1; }
+                for (size_t k = 0; k < js.size(); k++) { match[js[k]] = ps[k]; how[js[k]] = 3; used[ps[k]] = 1; }
                 return;
             }
         }
@@ -514,6 +553,7 @@ void match_task(const TaskScan& t, std::vector<Track>& tracks, std::vector<uint3
             const auto [b1, b2] = best[pr.j];
             if (b2 < 2.0f * b1 + 0.5f && b2 < 1e29f) { ambiguous[pr.j] = 1; continue; }
             match[pr.j] = pr.p;
+            how[pr.j] = 4;
             used[pr.p] = 1;
         }
     };
@@ -554,17 +594,36 @@ void match_task(const TaskScan& t, std::vector<Track>& tracks, std::vector<uint3
         k.sig = r.sig;
         k.t[0] = r.t[0], k.t[1] = r.t[1], k.t[2] = r.t[2];
         k.mh = r.mh;
+        std::memcpy(k.r, r.r, sizeof k.r);
         if (match[j] >= 0) {
             const Track& o = tracks[match[j]];
             k.id = o.id;
             for (int c = 0; c < 3; c++) k.v[c] = r.t[c] - o.t[c];
+            const bool log = count && g_log_on.load();
+            k.w = !log || how[j] == 1 ? 0.0f : rot_step_deg(o.r, r.r);   // for the log only
+            if (log && how[j] > 1) {
+                char b[260];
+                std::snprintf(b, sizeof b, "%" PRIu64 " %u %c %u %06X %.2f %.2f %.3f %.2f %.2f %u %u %.1f,%.1f,%.1f\n", t.task, k.id, tier2_cand[j] ? '2' : '1', unsigned(how[j]), r.parent,
+                              std::sqrt(k.v[0] * k.v[0] + k.v[1] * k.v[1] + k.v[2] * k.v[2]), k.w, scale_step(o.r, r.r), speed(o), o.w, r.tris, r.vtx, r.t[0], r.t[1], r.t[2]);
+                std::lock_guard lock{g_log_mutex};
+                if (g_log.size() < (64u << 20)) g_log += b;
+            }
             xf_id[j] = k.id;
             nm++;
             if (tier2_cand[j]) nm2++;
         } else {
             k.id = g_next_id++;
-            if (unresolved[j] || (over_budget && !has_key[j])) nbail++;   // out of budget: RT64's own search
-            else if (ambiguous[j]) namb++;                                 // tie with another candidate: RT64's own search
+            if (unresolved[j] || (over_budget && !has_key[j])) {           // out of budget
+                // A tier-1 piece is left to RT64's own search, as before. A piece from a list that did not repeat gets an ID with no partner (shown
+                // as it is): RT64's search pairs those across objects. THPS2 Philadelphia at Full draws far objects with one matrix per vertex from the
+                // task's own list, hundreds alike in draw shape: paired by RT64, vertices of one object were drawn half way to another's in the
+                // in-between frame (stretched trees, sky through buildings) whenever the 0.6 ms budget ran out, which it does in most frames there.
+                // A larger budget was tried (2 ms) and dropped: the walk runs on the gfx thread, and under load its extra wall time made THPS1 frames late
+                // enough to change the game's time-scaled physics (ride traces moved); the far pieces it would have paired hardly move anyway.
+                nbail++;
+                if (!has_key[j]) xf_id[j] = k.id;
+            }
+            else if (ambiguous[j]) { namb++; if (g_ambig_fresh.load()) xf_id[j] = k.id; }   // tie with another candidate: RT64's own search (or no partner)
             else if (!has_key[j] && !tier2) nun++;                         // first sight of this list (tier 2 off): RT64's own search, tracked from the next frame
             else { xf_id[j] = k.id; nfar++; }                              // new object / nothing within the gate (a teleport): an ID with no partner
         }
@@ -585,6 +644,7 @@ void assign_ids(const TaskScan& t, bool cut) {
     g_mtx_cursor = 0;
     g_mtx_abort = false;
     g_last_tagged = false;
+    g_ignore_set = false;
     g_task_cut = cut;
     if (g_reset_tracks.exchange(false)) g_tracks.clear();
     if (t.projs == 0 || t.truncated) return;   // not a 3D task: keep the tracks of the last one
@@ -675,6 +735,14 @@ void ids_command(RT64::State* state, uint32_t cmd_address, uint32_t w0, uint32_t
         return;
     }
     if (g_task_cut) return;      // the cut handler already tagged the model stack G_EX_ID_IGNORE for the rest of the task
+    if (g_all_ignore.load()) {
+        if (!g_ignore_set)
+            state->rsp->matrixId(G_EX_ID_IGNORE, false, false, false, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP,
+                                 G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP, G_EX_COMPONENT_SKIP,
+                                 G_EX_COMPONENT_SKIP, G_EX_ORDER_LINEAR, G_EX_ASPECT_AUTO, G_EX_EDIT_NONE, false, false);
+        g_ignore_set = true;
+        return;
+    }
     const uint32_t id = g_mtx_ids[k];
     if (id == G_EX_ID_AUTO && !g_last_tagged) return;   // the stack's top is still the default group
     g_idstats.mtx++;
@@ -741,6 +809,24 @@ bool ids_control(const std::string& cmd, std::istringstream& in) {
         else if (sub == "tier2") { std::string v; in >> v; g_tier2 = v != "off" && v != "0"; }
         else if (sub == "step") { float v = 100; in >> v; g_max_step = v; }
         else if (sub == "reset") { g_reset_tracks = true; }
+        else if (sub == "ignore") { std::string v; in >> v; g_all_ignore = v == "on"; }
+        else if (sub == "ambig") { std::string v; in >> v; g_ambig_fresh = v == "fresh"; }
+        else if (sub == "log") {   // ids log FILE: start; ids log off: write FILE (task id tier rule parent dist rot_deg scale prev_speed prev_rot_deg tris vtx x,y,z)
+            std::string v;
+            in >> v;
+            std::lock_guard lock{g_log_mutex};
+            if (v == "off") {
+                g_log_on = false;
+                std::ofstream f(g_log_file);
+                f << "# task id tier rule(2 one-to-one, 3 in order, 4 nearest) parent dist rot_deg scale prev_speed prev_rot_deg tris vtx pos\n" << g_log;
+                reply("ok ids log written=" + std::to_string(g_log.size()) + " " + g_log_file);
+                g_log.clear();
+                return true;
+            }
+            g_log.clear();
+            g_log_file = v;
+            g_log_on = !v.empty();
+        }
         else if (sub == "slow") {   // the ten slowest walks (wall time), the histograms
             std::lock_guard lock{g_walk_mutex};
             std::string h = "ok ids slow hist_ms(<.25 <.5 <1 <2 <4 <8 <16 more) wall=";

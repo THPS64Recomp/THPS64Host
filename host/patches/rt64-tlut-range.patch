@@ -1,0 +1,22 @@
+RT64 4337374: a TLUT load's RDRAM range was computed 4x too long (found on THPS2 School II at draw distance Full).
+
+RDP::loadTLUTOperation measured the bytes a palette load reads as 8 per entry (`wordsPerRow << 3`), the size an entry takes in
+TMEM, where each 16-bit entry is stored four times. The copy itself (loadToTMEMCommon with TLUT) reads 2 bytes per entry. The
+range feeds checkImageOverlap and checkFramebufferOverlap, so a 16-entry palette at 0x3FFFA0 (really 0x3FFFA0-0x3FFFC0) counted
+as reading 0x3FFFA0-0x400020, the start of THPS2's third colour image at 0x400000. Every frame drawn there was cut into 5 to 10
+framebuffer pairs ("sampling from the colour image"), each synchronised, and on some of them part of the ground was not drawn: flat
+patches of the clear colour. Fix: 2 bytes per entry.
+
+--- a/src/hle/rt64_rdp.cpp
++++ b/src/hle/rt64_rdp.cpp
+@@ -558,7 +558,9 @@
+         const bool RGBA32 = (loadTile.siz == G_IM_SIZ_32b) && (loadTile.fmt == G_IM_FMT_RGBA);
+         if (deferred) {
+             // Flush current framebuffer pair if any of the images being written to are loaded by this TLUT.
+-            const uint32_t textureEnd = textureStart + (rowCount - 1) * bytesPerRow + (wordsPerRow << 3);
++            // [thps-recomp] A TLUT entry is 2 bytes in RDRAM (the load advances 0x2 per entry); 8 bytes is its size in TMEM, where it
++            // is stored four times. With << 3 a 16-entry palette 0x60 bytes below a framebuffer counted as reading the framebuffer.
++            const uint32_t textureEnd = textureStart + (rowCount - 1) * bytesPerRow + (wordsPerRow << 1);
+             checkImageOverlap(textureStart, textureEnd);
+ 
+             // Discard any FB regions currently loaded into TMEM within the specified range.
