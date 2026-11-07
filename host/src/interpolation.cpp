@@ -397,6 +397,27 @@ bool hfr_control(const std::string& cmd, std::istringstream& in) {
         reply("ok dltrace task=" + std::to_string(t));
         return true;
     }
+    if (cmd == "pcapfence") {
+        RT64::Application* app = g_app.load();
+        if (!app || !thps::ride_is_held()) { reply("err pcapfence needs an active ride hold"); return true; }
+        // No further guest update can submit graphics while the ride is held.
+        // Snapshot the submitted present under its queue lock, then wait for that
+        // exact workload/present, not an elapsed delay or a cached host counter.
+        uint64_t workload = 0, present = 0;
+        {
+            const std::scoped_lock lock(app->presentQueue->cursorMutex);
+            const auto& last = app->presentQueue->presents[app->presentQueue->previousWriteCursor()];
+            workload = last.workloadId;
+            present = last.presentId;
+        }
+        app->workloadQueue->waitForWorkloadId(workload);
+        app->presentQueue->waitForPresentId(present);
+        app->workloadQueue->waitForIdle();
+        app->presentQueue->waitForIdle();
+        reply("ok pcapfence workload=" + std::to_string(workload) + " present=" + std::to_string(present) +
+              " composited=" + std::to_string(app->presentQueue->presentedFrameCount.load()));
+        return true;
+    }
     if (cmd == "pcap") {
         int every = 0;
         std::string dir;

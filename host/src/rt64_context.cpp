@@ -321,8 +321,17 @@ public:
         if (const char* t = std::getenv("THPS_TEST_REFRESH")) rate = std::string(t) == "display" ? -1 : std::max(0, std::atoi(t));
         uc.refreshRate = rate < 0 ? RR::Display : rate > 0 ? RR::Manual : RR::Original;
         if (rate > 0) uc.refreshRateTarget = rate;
-        std::printf("[thps] gfx: %s\n", thps::gfx_describe().c_str());
-        std::fflush(stdout);
+        // Renderer setup and settings updates can apply the same values again.
+        // Keep useful changes in the log without repeating the current values.
+        static std::mutex log_mutex;
+        static std::string last_description;
+        const std::string description = thps::gfx_describe();
+        std::lock_guard<std::mutex> lock(log_mutex);
+        if (description != last_description) {
+            std::printf("[thps] gfx: %s\n", description.c_str());
+            std::fflush(stdout);
+            last_description = description;
+        }
     }
 
     // --control "edges N": compares the border bands (outer 1/24 of the width on each side) of

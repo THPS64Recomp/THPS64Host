@@ -117,3 +117,45 @@ renderer and styles, and the platform code are adapted from Zelda64Recomp (GPL-3
 This is an unofficial fan project. It isn't affiliated with or endorsed by Activision, Neversoft, Edge of Reality,
 Tony Hawk or Nintendo, or by the N64Recomp, N64ModernRuntime and RT64 projects. *Tony Hawk's Pro Skater* is a trademark of
 Activision; Nintendo 64 is a trademark of Nintendo.
+
+## Recorded rides for tests
+
+`--ride-record FILE` records the input read from port 1 for the next course. THPS2/3 start at the first gameplay input read
+after the goals sheet; THPS1 starts when the course is loaded. `--ride-play FILE` uses the boundary declared in the file. The control channel also accepts `ride rec FILE`, `ride play FILE`, `ride stop` and `ride` (status).
+
+Experimental configured timing is opt-in for the audited THPS2 US static and split builds:
+`--ride-step 1/30 --ride-record FILE`, or `ride rec-step 1/30 FILE`. Arm before entering a new course while no selected
+skater exists. A present skater, unaudited version/region, LiveRecomp or PAL override produces an explicit error.
+A new v3 file declares the selected version/class and configured base step; playback uses its own declaration.
+The experimental `timing=frame-time-v2` policy chooses both the float1/30 output and its two integer tick units.
+Earlier experimental v3 files declaring `frame-time-v1` are refused; use their original experimental engine to reproduce them.
+Legacy v1/v2 files and ordinary play retain their existing timing. `--ride-step` with legacy playback is refused.
+The original game still applies its Slow-Nic modifiers. Stop reports `stop_pending=1` until the next writer, keeping
+any already configured input in the recording. That next writer uses ordinary timing; the following input boundary
+publishes the file and can hold for capture. Quitting before that drain does not publish it. Status reports writer/restoration/integer-output
+counts and errors. This private experimental path still needs its fresh record/replay and lifecycle validation gates.
+
+A retry starts a new course. Playback ends at EOF; `ride` reports the consumed and total read counts.
+
+Ride files contain only controller inputs. Version 2 stores the game family, buttons, full-precision stick floats and pad
+presence, plus the start boundary. The loader also accepts the prototype's three-column version 1 files. It rejects empty, malformed, truncated or
+wrong-game version 2 files. Keep captures and recorded fixtures under ignored `build/` folders until they have been reviewed.
+
+Set `RIDE_STEP=1/30` only when creating a new configured canonical recording; playback obtains timing from the file.
+Configured canonical recording requires the default composited capture fence.
+
+The harness steps `("ride_arm", FILE)` before entering a course and `("ride_end", SHOT_NAME)` after it play the complete
+stream, check EOF and take an end screenshot. End a canonical ride with the game paused. The opt-in `ride-canonical`
+session in each game records a moving route with tricks and grind attempts, or replays `RIDE_FILE` when `RIDE_MODE=play`.
+Select it with `--session ride-canonical` or `--only ride_canonical`. It arms after course selection so an attract demo cannot
+be recorded by mistake. Recording asserts a substantial input stream and observed air; THPS1 also requires an observed grind.
+Set `RIDE_REFERENCE` to a recording's end PNG to require pixel-exact replay against it.
+
+Canonical tests use a completed composited capture: `ride hold 1` arms a fence at the input read after the complete recording
+or playback. Capture starts before EOF; the harness waits for the submitted graphics/present IDs and keeps their final completed image, then `ride hold 0`
+releases it. The hold times out with an explicit status after 20 seconds and is released on quit. `RIDE_CAPTURE=native`
+selects the older native screenshot path for diagnosis. Ordinary checkpoint screenshots keep their existing path.
+`THPS_RIDE_TRACE=1` logs per-input physics/run/timescale transitions locally; those diagnostics never enter a ride file.
+
+Virtual stick commands take integer SDL axes (`-32768..32767`). After `vpad attach`, press a button to claim port 1 before
+riding: stick motion alone intentionally does not claim a controller. Check the `Virtual Controller takes port 1` log line.

@@ -168,6 +168,76 @@ class Session:
         self.inst.send(f"peek {addr if isinstance(addr, str) else f'{addr:#x}'} {n}")
         return [int(w, 16) for w in self.inst.expect("ok peek", 30).split()[3:]]
 
+    def _ride_completed(self, state):
+        # Re-read after a record fence: configured files publish at N+1, after
+        # the immediate stop reply, so a deferred write error must still fail.
+        if state.get("error") != "none":
+            raise StepFail(f"ride ended with an error: {state}")
+        if state.get("step") == "1/30":
+            writers, restores = int(state.get("step_writers", 0)), int(state.get("step_restores", 0))
+            ticks = int(state.get("step_tick_writes", 0))
+            if not writers or restores != writers or ticks != writers or int(state.get("installed", 1)) or int(state.get("draining", 1)) or int(state.get("stop_pending", 1)):
+                raise StepFail(f"configured ride did not restore and drain: {state}")
+
+    def _ride_capture_start(self):
+        if getattr(self, "ride_present_dir", None) is not None:
+            return
+        directory = self.out / f"ride_present_{self.k}_{time.monotonic_ns()}"
+        directory.mkdir()
+        self.ride_present_dir = directory
+        self.ride_present_first = int(self.inst.cmd(f"pcap 1 {directory}")["composited"])
+
+    def _ride_present_end(self) -> H.Image:
+        """Drain the submitted workload/present while input N+1 is held.
+
+        Capture must already be armed: holding the guest also stops new presents.
+        Keep the exact final completed index, not a native VI buffer or a file age.
+        """
+        deadline = time.monotonic() + 12
+        directory = getattr(self, "ride_present_dir", None)
+        try:
+            if directory is None:
+                raise StepFail("ride present capture was not armed before EOF")
+            while True:
+                state = self.inst.cmd("ride")
+                if state.get("hold") == "active":
+                    break
+                if state.get("hold") == "timeout" or time.monotonic() >= deadline:
+                    raise StepFail(f"ride capture did not hold the next input read: {state}")
+                time.sleep(0.01)
+            previous, stable = None, 0
+            while time.monotonic() < deadline:
+                fence = self.inst.cmd("pcapfence")
+                key = tuple(int(fence[k]) for k in ("workload", "present", "composited"))
+                stable = stable + 1 if key == previous else 1
+                previous = key
+                # Each fence awaits the actual submitted workload and present IDs.
+                # Repeated equal queue snapshots also cover a late queued VI swap.
+                if stable >= 4:
+                    target = key[2] - 1
+                    files = [p for p in directory.glob("present_*.png") if int(p.name.split("_")[1]) == target]
+                    if target >= self.ride_present_first and files:
+                        try:
+                            image = H.read_png(files[0])
+                        except Exception:   # the PNG writer may still be finishing this exact index
+                            time.sleep(0.05)
+                            continue
+                        state = self.inst.cmd("ride")
+                        if state.get("hold") != "active":
+                            raise StepFail(f"ride capture lost its input hold: {state}")
+                        self.k += 1
+                        self.last_img, self.last_shot = image, files[0]
+                        self.notes.append(f"ride held after EOF; completed workload={key[0]} present={key[1]} capture={target}")
+                        return image
+                time.sleep(0.05)
+            raise StepFail("ride capture did not obtain the final fenced composited frame")
+        finally:
+            try:
+                self.inst.cmd("pcap 0")
+            finally:
+                self.inst.cmd("ride hold 0")
+                self.ride_present_dir = None
+
     def _captures_until_now(self, timeout: float = 30) -> list[Path]:
         """The session's present captures up to the frame composited now, once they are on disk. The host PNG-encodes them on writer
         threads that can fall seconds behind: at 120 Hz with present_every 3 (40 captures/s at 1280x720) and a loaded machine the newest
@@ -711,6 +781,74 @@ class Session:
             self.inst.send(f"vpad axis {axis} 0")
             self.inst.expect("ok vpad", 30)
             self.inst.wait_frames(10)
+        elif kind == "ride_arm":
+            # ("ride_arm", FILE): arm input playback before entering/retrying a course.
+            path = Path(st[1]).resolve()
+            if not path.is_file():
+                raise StepFail(f"ride does not exist: {path}")
+            state = self.inst.cmd(f"ride play {path}")
+            if state.get("mode") != "play-armed":
+                raise StepFail(f"ride did not arm: {state}")
+            self.notes.append(f"ride armed: {path}")
+        elif kind == "ride_record_end":
+            # ("ride_record_end", SHOT, MIN_READS, {PHYS_STATE: MIN_SAMPLES}): close and verify a canonical recording.
+            if len(st) > 4 and st[4] == "present":
+                self._ride_capture_start()
+                self.inst.wait_frames(8)   # saved inputs include these updates before requesting the writer stop/hold
+            state = self.inst.cmd("ride stop")
+            if len(st) > 4 and st[4] == "present":
+                self._ride_present_end()
+            else:
+                self.shot()
+            self.keep(st[1])
+            state = self.inst.cmd("ride")
+            self._ride_completed(state)
+            if int(state.get("reads", 0)) < st[2] or state.get("mode") != "off" or state.get("error") != "none":
+                raise StepFail(f"canonical ride recording is incomplete: {state}")
+            samples = re.findall(r"\[thps\] ride: physics state samples([^\n]*)", self.inst.log_path.read_text())
+            counts = dict((int(k), int(v)) for k, v in re.findall(r"(\d+):(\d+)", samples[-1] if samples else ""))
+            self.notes.append(f"recorded {state['reads']} reads; physics state samples {counts}")
+            for phys, minimum in st[3].items():
+                if counts.get(phys, 0) < minimum:
+                    raise StepFail(f"canonical ride needs state {phys} at least {minimum} times, got {counts}")
+        elif kind == "ride_end":
+            # ("ride_end", SHOT[, TIMEOUT]): consume the whole armed ride, then capture.
+            # End canonical rides in pause so host/controller scheduling after EOF cannot move the skater.
+            deadline = time.monotonic() + (st[2] if len(st) > 2 else 180) * self.slow
+            fenced = len(st) > 4 and st[4] == "present"
+            try:
+                while True:
+                    state = self.inst.cmd("ride")
+                    if fenced and state.get("mode") != "off" and int(state.get("reads", 0)) - int(state.get("next", 0)) <= 90:
+                        self._ride_capture_start()
+                    if state.get("mode") == "off":
+                        if int(state.get("next", 0)) != int(state.get("reads", 0)) or not int(state.get("reads", 0)):
+                            raise StepFail(f"ride stopped before EOF: {state}")
+                        self._ride_completed(state)
+                        break
+                    if time.monotonic() >= deadline:
+                        raise StepFail(f"ride did not reach EOF: {state}")
+                    if fenced:
+                        time.sleep(0.05)   # the final input hold stops guest frame acknowledgements
+                    else:
+                        self.inst.wait_frames(10)
+            except BaseException:
+                if fenced:
+                    self.inst.cmd("ride hold 0")
+                raise
+            self.notes.append(f"ride consumed {state['next']}/{state['reads']} input reads")
+            if len(st) > 4 and st[4] == "present":
+                image = self._ride_present_end()
+            else:
+                self.inst.wait_frames(30)
+                image, _ = self.shot()
+            self.keep(st[1])
+            if len(st) > 3 and st[3]:
+                reference = H.read_png(Path(st[3]))
+                if (image.w, image.h) != (reference.w, reference.h) or image.rgb != reference.rgb:
+                    changed = sum(a != b for a, b in zip(image.rgb, reference.rgb))
+                    raise StepFail(f"ride end differs from {st[3]}: {changed} RGB components changed")
+                self.notes.append(f"ride end is pixel-exact against {st[3]}")
         elif kind == "shot":
             # ("shot", NAME): grab the current RDRAM frame and keep it as <out>/NNNN_NAME.png (evidence).
             self.shot()

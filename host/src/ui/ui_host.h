@@ -24,7 +24,8 @@ void set_window(SDL_Window* window);   // create_window()
 bool handle_event(const SDL_Event& ev);
 
 // --control "ui ..." (test runner, main thread): "ui esc" | "ui click X Y" (window points) | "ui click #id" (centre of that element) | "ui tab N" | "ui state".
-// Events go through SDL_PushEvent, so they take the same path as a person's input.
+// Keys/mouse use SDL_PushEvent. Trusted "ui pad" calls handle_event directly:
+// SDL2-compat rewrites synthetic controller instance IDs during push/poll.
 std::string control(const std::string& args);
 
 bool menu_open();      // any thread

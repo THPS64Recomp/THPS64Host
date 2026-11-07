@@ -18,6 +18,7 @@
 //                               frames, and the largest sample step at an underrun edge (edge_step; edge_raw = the hard
 //                               cut it would have been without the declick), device=1 for a real SDL device
 //   audiostall MS               the next audio buffer is queued MS ms late (forces an underrun: declick test)
+//   ride [rec F|play F|stop]    record port 1's reads from the next course start to F, or replay F from it (src/ride.cpp)
 //   audiogap N                  the next device callback plays N frames (1-256) as an underrun mid-callback, then resumes
 //                               within that callback (a short underrun: declick test of the fade-out/fade-in blend)
 //   stats                       counters (frames, polls, gfx tasks, elapsed time)
@@ -198,6 +199,22 @@ void handle(const std::string& line) {
                       int(thps::audio_device_open()));
         g_audio_sumsq0 = sq, g_audio_samples0 = n, g_audio_nonsilent0 = nz, g_audio_underruns0 = un, g_audio_starved0 = sf;
         reply(buf);
+    } else if (cmd == "ride") {   // ride [rec FILE | play FILE | stop]: record or replay port 1 from the next course start (src/ride.cpp)
+        std::string sub, path;
+        in >> sub;
+        std::getline(in >> std::ws, path);
+        if (sub == "rec" && !path.empty()) { if (!thps::ride_record(path)) { reply("err ride " + thps::ride_error()); return; } }
+        else if (sub == "rec-step") {
+            std::istringstream fields(path); std::string step, file;
+            fields >> step; std::getline(fields >> std::ws,file);
+            if (file.empty()) { reply("err ride usage: ride rec-step 1/30 FILE"); return; }
+            if (!thps::ride_record_step(file,step)) { reply("err ride " + thps::ride_error()); return; }
+        }
+        else if (sub == "play" && !path.empty()) { if (!thps::ride_play(path)) { reply("err ride can't read " + path + " (" + thps::ride_error() + ")"); return; } }
+        else if (sub == "stop") thps::ride_stop();
+        else if (sub == "hold" && (path == "0" || path == "1")) thps::ride_hold(path == "1");
+        else if (!sub.empty()) { reply("err ride usage: ride [rec FILE | rec-step 1/30 FILE | play FILE | stop | hold 0|1]"); return; }
+        reply("ok ride " + thps::ride_status());
     } else if (cmd == "audiostall") {
         int ms = 0;
         in >> ms;
@@ -549,4 +566,3 @@ void thps::control_dl_stats(uint64_t task, uint64_t tris, uint64_t texrects, uin
     }
     if (!out.empty()) reply(out);
 }
-
